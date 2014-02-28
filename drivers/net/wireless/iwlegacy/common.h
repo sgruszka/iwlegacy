@@ -547,9 +547,8 @@ enum {
 	CMD_NO_SKB =		0,
 	CMD_SIZE_HUGE =		(1 << 0),
 	CMD_ASYNC =		(1 << 1),
-	CMD_WANT_SKB =		(1 << 2),
-	CMD_MAPPED =		(1 << 3),
-	CMD_COPY_PKT =		(1 << 4),
+	CMD_MAPPED =		(1 << 2),
+	CMD_COPY_PKT =		(1 << 3),
 };
 
 #define DEF_CMD_PAYLOAD_SIZE 320
@@ -577,7 +576,6 @@ struct il_device_cmd {
 
 struct il_host_cmd {
 	const void *data;
-	unsigned long reply_page;
 	struct il_rx_pkt *pkt_ptr;
 	void (*callback) (struct il_priv *il, struct il_device_cmd *cmd,
 			  struct il_rx_pkt *pkt);

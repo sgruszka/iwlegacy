@@ -285,9 +285,6 @@ il_send_cmd_async(struct il_priv *il, struct il_host_cmd *cmd)
 
 	BUG_ON(!(cmd->flags & CMD_ASYNC));
 
-	/* An asynchronous command can not expect an SKB to be set. */
-	BUG_ON(cmd->flags & CMD_WANT_SKB);
-
 	/* Assign a generic callback if one is not provided */
 	if (!cmd->callback)
 		cmd->callback = il_generic_cmd_callback;
@@ -353,38 +350,27 @@ il_send_cmd_sync(struct il_priv *il, struct il_host_cmd *cmd)
 		IL_ERR("Command %s aborted: RF KILL Switch\n",
 		       il_get_cmd_string(cmd->id));
 		ret = -ECANCELED;
-		goto fail;
+		goto out;
 	}
 	if (test_bit(S_FW_ERROR, &il->status)) {
 		IL_ERR("Command %s failed: FW Error\n",
 		       il_get_cmd_string(cmd->id));
 		ret = -EIO;
-		goto fail;
-	}
-	if ((cmd->flags & CMD_WANT_SKB) && !cmd->reply_page) {
-		IL_ERR("Error: Response NULL in '%s'\n",
-		       il_get_cmd_string(cmd->id));
-		ret = -EIO;
-		goto cancel;
+		goto out;
 	}
 
 	ret = 0;
 	goto out;
 
 cancel:
-	if (cmd->flags & (CMD_WANT_SKB | CMD_COPY_PKT)) {
+	if (cmd->flags & CMD_COPY_PKT) {
 		/*
-		 * Cancel the CMD_WANT_SKB flag for the cmd in the
+		 * Cancel the CMD_COPY_PKT flag for the cmd in the
 		 * TX cmd queue. Otherwise in case the cmd comes
 		 * in later, it will possibly set an invalid
 		 * address (cmd->meta.source).
 		 */
-		il->txq[il->cmd_queue].meta[cmd_idx].flags &= ~(CMD_WANT_SKB | CMD_COPY_PKT);
-	}
-fail:
-	if (cmd->reply_page) {
-		il_free_pages(il, cmd->reply_page);
-		cmd->reply_page = 0;
+		il->txq[il->cmd_queue].meta[cmd_idx].flags &= ~CMD_COPY_PKT;
 	}
 out:
 	return ret;
@@ -3181,7 +3167,7 @@ il_enqueue_hcmd(struct il_priv *il, struct il_host_cmd *cmd)
 
 	memset(out_meta, 0, sizeof(*out_meta));	/* re-initialize to NULL */
 	out_meta->flags = cmd->flags | CMD_MAPPED;
-	if (cmd->flags & (CMD_WANT_SKB | CMD_COPY_PKT))
+	if (cmd->flags & CMD_COPY_PKT)
 		out_meta->source = cmd;
 	if (cmd->flags & CMD_ASYNC)
 		out_meta->callback = cmd->callback;
@@ -3324,13 +3310,9 @@ il_tx_cmd_complete(struct il_priv *il, struct il_rx_buf *rxb)
 	pci_unmap_single(il->pci_dev, dma_unmap_addr(meta, mapping),
 			 dma_unmap_len(meta, len), PCI_DMA_BIDIRECTIONAL);
 
-	/* Input error checking is done when commands are added to queue. */
-	if (meta->flags & CMD_WANT_SKB) {
-		meta->source->reply_page = (unsigned long)rxb_addr(rxb);
-		rxb->page = NULL;
-	} else if (meta->flags & CMD_COPY_PKT) {
+	if (meta->flags & CMD_COPY_PKT)
 		memcpy(meta->source->pkt_ptr, pkt, sizeof(*pkt));
-	} else if (meta->callback)
+	else if (meta->callback)
 		meta->callback(il, cmd, pkt);
 
 	spin_lock_irqsave(&il->hcmd_lock, flags);
