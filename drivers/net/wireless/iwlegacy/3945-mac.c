@@ -668,12 +668,17 @@ il3945_get_measurement(struct il_priv *il,
 	struct il_host_cmd cmd = {
 		.id = C_SPECTRUM_MEASUREMENT,
 		.data = (void *)&spectrum,
-		.flags = CMD_WANT_SKB,
+		.flags = CMD_COPY_PKT,
 	};
 	u32 add_time = le64_to_cpu(params->start_time);
 	int rc;
 	int spectrum_resp_status;
 	int duration = le16_to_cpu(params->duration);
+
+	pkt = kmalloc(sizeof(*pkt), GFP_KERNEL);
+	if (!pkt)
+		return -ENOMEM;
+	cmd.pkt_ptr = pkt;
 
 	if (il_is_associated(il))
 		add_time =
@@ -708,12 +713,12 @@ il3945_get_measurement(struct il_priv *il,
 
 	rc = il_send_cmd_sync(il, &cmd);
 	if (rc)
-		return rc;
+		goto out;
 
-	pkt = (struct il_rx_pkt *)cmd.reply_page;
 	if (pkt->hdr.flags & IL_CMD_FAILED_MSK) {
 		IL_ERR("Bad return from N_RX_ON_ASSOC command\n");
 		rc = -EIO;
+		goto out;
 	}
 
 	spectrum_resp_status = le16_to_cpu(pkt->u.spectrum.status);
@@ -733,8 +738,8 @@ il3945_get_measurement(struct il_priv *il,
 		break;
 	}
 
-	il_free_pages(il, cmd.reply_page);
-
+out:
+	kfree(pkt);
 	return rc;
 }
 
