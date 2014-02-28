@@ -1674,13 +1674,13 @@ il3945_hw_reg_set_txpower(struct il_priv *il, s8 power)
 static int
 il3945_send_rxon_assoc(struct il_priv *il)
 {
-	int rc = 0;
+	int rc;
 	struct il_rx_pkt *pkt;
 	struct il3945_rxon_assoc_cmd rxon_assoc;
 	struct il_host_cmd cmd = {
 		.id = C_RXON_ASSOC,
 		.len = sizeof(rxon_assoc),
-		.flags = CMD_WANT_SKB,
+		.flags = CMD_COPY_PKT,
 		.data = &rxon_assoc,
 	};
 	const struct il_rxon_cmd *rxon1 = &il->staging;
@@ -1694,6 +1694,11 @@ il3945_send_rxon_assoc(struct il_priv *il)
 		return 0;
 	}
 
+	pkt = kmalloc(sizeof(*pkt), GFP_KERNEL);
+	if (!pkt)
+		return -ENOMEM;
+	cmd.pkt_ptr = pkt;
+
 	rxon_assoc.flags = il->staging.flags;
 	rxon_assoc.filter_flags = il->staging.filter_flags;
 	rxon_assoc.ofdm_basic_rates = il->staging.ofdm_basic_rates;
@@ -1702,16 +1707,15 @@ il3945_send_rxon_assoc(struct il_priv *il)
 
 	rc = il_send_cmd_sync(il, &cmd);
 	if (rc)
-		return rc;
+		goto out;
 
-	pkt = (struct il_rx_pkt *)cmd.reply_page;
 	if (pkt->hdr.flags & IL_CMD_FAILED_MSK) {
 		IL_ERR("Bad return from C_RXON_ASSOC command\n");
 		rc = -EIO;
 	}
 
-	il_free_pages(il, cmd.reply_page);
-
+out:
+	kfree(pkt);
 	return rc;
 }
 
