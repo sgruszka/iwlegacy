@@ -620,10 +620,17 @@ il4965_pass_packet_to_mac80211(struct il_priv *il, struct ieee80211_hdr *hdr,
 	ieee80211_rx(il->hw, skb);
 }
 
+
+static inline bool
+il4965_is_data_rx(struct il_rx_pkt *pkt)
+{
+	return pkt->hdr.cmd == N_RX || pkt->hdr.cmd == N_RX_MPDU;
+}
+
 /* Called for N_RX (legacy ABG frames), or
  * N_RX_MPDU (HT high-throughput N frames). */
 static void
-il4965_hdl_rx(struct il_priv *il, struct il_rx_buf *rxb)
+il4965_data_rx(struct il_priv *il, struct il_rx_buf *rxb)
 {
 	struct ieee80211_hdr *header;
 	struct ieee80211_rx_status rx_status = {};
@@ -755,9 +762,8 @@ il4965_hdl_rx(struct il_priv *il, struct il_rx_buf *rxb)
 /* Cache phy data (Rx signal strength, etc) for HT frame (N_RX_PHY).
  * This will be used later in il_hdl_rx() for N_RX_MPDU. */
 static void
-il4965_hdl_rx_phy(struct il_priv *il, struct il_rx_buf *rxb)
+il4965_hdl_rx_phy(struct il_priv *il, struct il_rx_pkt *pkt)
 {
-	struct il_rx_pkt *pkt = rxb_addr(rxb);
 	il->_4965.last_phy_res_valid = true;
 	il->_4965.ampdu_ref++;
 	memcpy(&il->_4965.last_phy_res, pkt->u.raw,
@@ -1261,9 +1267,8 @@ il4965_dump_fh(struct il_priv *il, char **buf, bool display)
 }
 
 static void
-il4965_hdl_missed_beacon(struct il_priv *il, struct il_rx_buf *rxb)
+il4965_hdl_missed_beacon(struct il_priv *il, struct il_rx_pkt *pkt)
 {
-	struct il_rx_pkt *pkt = rxb_addr(rxb);
 	struct il_missed_beacon_notif *missed_beacon;
 
 	missed_beacon = &pkt->u.missed_beacon;
@@ -1368,11 +1373,10 @@ il4965_accumulative_stats(struct il_priv *il, __le32 * stats)
 #endif
 
 static void
-il4965_hdl_stats(struct il_priv *il, struct il_rx_buf *rxb)
+il4965_hdl_stats(struct il_priv *il, struct il_rx_pkt *pkt)
 {
 	const int recalib_seconds = 60;
 	bool change;
-	struct il_rx_pkt *pkt = rxb_addr(rxb);
 
 	D_RX("Statistics notification received (%d vs %d).\n",
 	     (int)sizeof(struct il_notif_stats),
@@ -1410,10 +1414,8 @@ il4965_hdl_stats(struct il_priv *il, struct il_rx_buf *rxb)
 }
 
 static void
-il4965_hdl_c_stats(struct il_priv *il, struct il_rx_buf *rxb)
+il4965_hdl_c_stats(struct il_priv *il, struct il_rx_pkt *pkt)
 {
-	struct il_rx_pkt *pkt = rxb_addr(rxb);
-
 	if (le32_to_cpu(pkt->u.stats.flag) & UCODE_STATS_CLEAR_MSK) {
 #ifdef CONFIG_IWLEGACY_DEBUGFS
 		memset(&il->_4965.accum_stats, 0,
@@ -1424,7 +1426,7 @@ il4965_hdl_c_stats(struct il_priv *il, struct il_rx_buf *rxb)
 #endif
 		D_RX("Statistics have been cleared\n");
 	}
-	il4965_hdl_stats(il, rxb);
+	il4965_hdl_stats(il, pkt);
 }
 
 
@@ -2773,9 +2775,8 @@ il4965_tx_status_reply_tx(struct il_priv *il, struct il_ht_agg *agg,
  * il4965_hdl_tx - Handle standard (non-aggregation) Tx response
  */
 static void
-il4965_hdl_tx(struct il_priv *il, struct il_rx_buf *rxb)
+il4965_hdl_tx(struct il_priv *il, struct il_rx_pkt *pkt)
 {
-	struct il_rx_pkt *pkt = rxb_addr(rxb);
 	u16 sequence = le16_to_cpu(pkt->hdr.sequence);
 	int txq_id = SEQ_TO_QUEUE(sequence);
 	int idx = SEQ_TO_IDX(sequence);
@@ -2920,9 +2921,8 @@ il4965_hwrate_to_tx_control(struct il_priv *il, u32 rate_n_flags,
  * of frames sent via aggregation.
  */
 static void
-il4965_hdl_compressed_ba(struct il_priv *il, struct il_rx_buf *rxb)
+il4965_hdl_compressed_ba(struct il_priv *il, struct il_rx_pkt *pkt)
 {
-	struct il_rx_pkt *pkt = rxb_addr(rxb);
 	struct il_compressed_ba_resp *ba_resp = &pkt->u.compressed_ba;
 	struct il_tx_queue *txq = NULL;
 	struct il_ht_agg *agg;
@@ -4030,9 +4030,8 @@ il4965_hw_tx_queue_init(struct il_priv *il, struct il_tx_queue *txq)
  *
  ******************************************************************************/
 static void
-il4965_hdl_alive(struct il_priv *il, struct il_rx_buf *rxb)
+il4965_hdl_alive(struct il_priv *il, struct il_rx_pkt *pkt)
 {
-	struct il_rx_pkt *pkt = rxb_addr(rxb);
 	struct il_alive_resp *palive;
 	struct delayed_work *pwork;
 
@@ -4087,9 +4086,8 @@ il4965_bg_stats_periodic(unsigned long data)
 }
 
 static void
-il4965_hdl_beacon(struct il_priv *il, struct il_rx_buf *rxb)
+il4965_hdl_beacon(struct il_priv *il, struct il_rx_pkt *pkt)
 {
-	struct il_rx_pkt *pkt = rxb_addr(rxb);
 	struct il4965_beacon_notif *beacon =
 	    (struct il4965_beacon_notif *)pkt->u.raw;
 #ifdef CONFIG_IWLEGACY_DEBUG
@@ -4127,9 +4125,8 @@ il4965_perform_ct_kill_task(struct il_priv *il)
 /* Handle notification from uCode that card's power state is changing
  * due to software, hardware, or critical temperature RFKILL */
 static void
-il4965_hdl_card_state(struct il_priv *il, struct il_rx_buf *rxb)
+il4965_hdl_card_state(struct il_priv *il, struct il_rx_pkt *pkt)
 {
-	struct il_rx_pkt *pkt = rxb_addr(rxb);
 	u32 flags = le32_to_cpu(pkt->u.card_state_notif.flags);
 	unsigned long status = il->status;
 
@@ -4208,8 +4205,6 @@ il4965_setup_handlers(struct il_priv *il)
 	il->handlers[N_MISSED_BEACONS] = il4965_hdl_missed_beacon;
 	/* Rx handlers */
 	il->handlers[N_RX_PHY] = il4965_hdl_rx_phy;
-	il->handlers[N_RX_MPDU] = il4965_hdl_rx;
-	il->handlers[N_RX] = il4965_hdl_rx;
 	/* block ack */
 	il->handlers[N_COMPRESSED_BA] = il4965_hdl_compressed_ba;
 	/* Tx response */
@@ -4230,7 +4225,7 @@ il4965_rx_handle(struct il_priv *il)
 	struct il_rx_pkt *pkt;
 	struct il_rx_queue *rxq = &il->rxq;
 	u32 r, i;
-	int reclaim;
+	bool reclaim;
 	unsigned long flags;
 	u8 fill_rx = 0;
 	u32 count = 8;
@@ -4254,8 +4249,6 @@ il4965_rx_handle(struct il_priv *il)
 		fill_rx = 1;
 
 	while (i != r) {
-		int len;
-
 		rxb = rxq->queue[i];
 
 		/* If an RXB doesn't have a Rx queue slot associated with it,
@@ -4270,19 +4263,21 @@ il4965_rx_handle(struct il_priv *il)
 			       PCI_DMA_FROMDEVICE);
 		pkt = rxb_addr(rxb);
 
-		len = le32_to_cpu(pkt->len_n_flags) & IL_RX_FRAME_SIZE_MSK;
-		len += sizeof(u32);	/* account for status word */
-
 		reclaim = il_need_reclaim(il, pkt);
 
-		/* Based on type of command response or notification,
-		 *   handle those that need handling via function in
-		 *   handlers table.  See il4965_setup_handlers() */
-		if (il->handlers[pkt->hdr.cmd]) {
+		if (il4965_is_data_rx(pkt)) {
+			D_RX("r = %d, i = %d, %s, 0x%02x\n", r, i,
+			     il_get_cmd_string(pkt->hdr.cmd), pkt->hdr.cmd);
+			il4965_data_rx(il, rxb);
+		} else if (il->handlers[pkt->hdr.cmd]) {
+			/* Based on type of command response or notification,
+			 * handle those that need handling via function in
+			 * handlers table. See il4965_setup_handlers()
+			 */
 			D_RX("r = %d, i = %d, %s, 0x%02x\n", r, i,
 			     il_get_cmd_string(pkt->hdr.cmd), pkt->hdr.cmd);
 			il->isr_stats.handlers[pkt->hdr.cmd]++;
-			il->handlers[pkt->hdr.cmd] (il, rxb);
+			il->handlers[pkt->hdr.cmd] (il, pkt);
 		} else {
 			/* No handling needed */
 			D_RX("r %d i %d No handler needed for %s, 0x%02x\n", r,
@@ -4301,7 +4296,7 @@ il4965_rx_handle(struct il_priv *il)
 			 * and fire off the (possibly) blocking il_send_cmd()
 			 * as we reclaim the driver command queue */
 			if (rxb->page)
-				il_tx_cmd_complete(il, rxb);
+				il_tx_cmd_complete(il, pkt);
 			else
 				IL_WARN("Claim null rxb?\n");
 		}

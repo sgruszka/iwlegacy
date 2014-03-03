@@ -236,14 +236,15 @@ void il3945_hw_build_tx_cmd_rate(struct il_priv *il, struct il_device_cmd *cmd,
 				 struct ieee80211_hdr *hdr, int sta_id);
 int il3945_hw_reg_send_txpower(struct il_priv *il);
 int il3945_hw_reg_set_txpower(struct il_priv *il, s8 power);
-void il3945_hdl_stats(struct il_priv *il, struct il_rx_buf *rxb);
-void il3945_hdl_c_stats(struct il_priv *il, struct il_rx_buf *rxb);
+void il3945_hdl_stats(struct il_priv *il, struct il_rx_pkt *pkt);
+void il3945_hdl_c_stats(struct il_priv *il, struct il_rx_pkt *pkt);
 void il3945_disable_events(struct il_priv *il);
 int il4965_get_temperature(const struct il_priv *il);
 void il3945_post_associate(struct il_priv *il);
 void il3945_config_ap(struct il_priv *il);
 
 int il3945_commit_rxon(struct il_priv *il);
+void il3945_data_rx(struct il_priv *il, struct il_rx_buf *rxb);
 
 /**
  * il3945_hw_find_station - Find station id for a given BSSID

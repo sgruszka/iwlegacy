@@ -744,9 +744,8 @@ out:
 }
 
 static void
-il3945_hdl_alive(struct il_priv *il, struct il_rx_buf *rxb)
+il3945_hdl_alive(struct il_priv *il, struct il_rx_pkt *pkt)
 {
-	struct il_rx_pkt *pkt = rxb_addr(rxb);
 	struct il_alive_resp *palive;
 	struct delayed_work *pwork;
 
@@ -777,19 +776,14 @@ il3945_hdl_alive(struct il_priv *il, struct il_rx_buf *rxb)
 }
 
 static void
-il3945_hdl_add_sta(struct il_priv *il, struct il_rx_buf *rxb)
+il3945_hdl_add_sta(struct il_priv *il, struct il_rx_pkt *pkt)
 {
-#ifdef CONFIG_IWLEGACY_DEBUG
-	struct il_rx_pkt *pkt = rxb_addr(rxb);
-#endif
-
 	D_RX("Received C_ADD_STA: 0x%02X\n", pkt->u.status);
 }
 
 static void
-il3945_hdl_beacon(struct il_priv *il, struct il_rx_buf *rxb)
+il3945_hdl_beacon(struct il_priv *il, struct il_rx_pkt *pkt)
 {
-	struct il_rx_pkt *pkt = rxb_addr(rxb);
 	struct il3945_beacon_notif *beacon = &(pkt->u.beacon_status);
 #ifdef CONFIG_IWLEGACY_DEBUG
 	u8 rate = beacon->beacon_notify_hdr.rate;
@@ -808,9 +802,8 @@ il3945_hdl_beacon(struct il_priv *il, struct il_rx_buf *rxb)
 /* Handle notification from uCode that card's power state is changing
  * due to software, hardware, or critical temperature RFKILL */
 static void
-il3945_hdl_card_state(struct il_priv *il, struct il_rx_buf *rxb)
+il3945_hdl_card_state(struct il_priv *il, struct il_rx_pkt *pkt)
 {
-	struct il_rx_pkt *pkt = rxb_addr(rxb);
 	u32 flags = le32_to_cpu(pkt->u.card_state_notif.flags);
 	unsigned long status = il->status;
 
@@ -1234,8 +1227,6 @@ il3945_rx_handle(struct il_priv *il)
 		D_RX("r = %d, i = %d\n", r, i);
 
 	while (i != r) {
-		int len;
-
 		rxb = rxq->queue[i];
 
 		/* If an RXB doesn't have a Rx queue slot associated with it,
@@ -1250,19 +1241,21 @@ il3945_rx_handle(struct il_priv *il)
 			       PCI_DMA_FROMDEVICE);
 		pkt = rxb_addr(rxb);
 
-		len = le32_to_cpu(pkt->len_n_flags) & IL_RX_FRAME_SIZE_MSK;
-		len += sizeof(u32);	/* account for status word */
-
 		reclaim = il_need_reclaim(il, pkt);
 
-		/* Based on type of command response or notification,
-		 *   handle those that need handling via function in
-		 *   handlers table.  See il3945_setup_handlers() */
-		if (il->handlers[pkt->hdr.cmd]) {
+		if (pkt->hdr.cmd == N_3945_RX) {
+			D_RX("r = %d, i = %d, %s, 0x%02x\n", r, i,
+			     il_get_cmd_string(pkt->hdr.cmd), pkt->hdr.cmd);
+			il3945_data_rx(il, rxb);
+		} else if (il->handlers[pkt->hdr.cmd]) {
+			/* Based on type of command response or notification,
+			 * handle those that need handling via function in
+			 * handlers table. See il3945_setup_handlers()
+			 */
 			D_RX("r = %d, i = %d, %s, 0x%02x\n", r, i,
 			     il_get_cmd_string(pkt->hdr.cmd), pkt->hdr.cmd);
 			il->isr_stats.handlers[pkt->hdr.cmd]++;
-			il->handlers[pkt->hdr.cmd] (il, rxb);
+			il->handlers[pkt->hdr.cmd] (il, pkt);
 		} else {
 			/* No handling needed */
 			D_RX("r %d i %d No handler needed for %s, 0x%02x\n", r,
@@ -1281,7 +1274,7 @@ il3945_rx_handle(struct il_priv *il)
 			 * and fire off the (possibly) blocking il_send_cmd()
 			 * as we reclaim the driver command queue */
 			if (rxb->page)
-				il_tx_cmd_complete(il, rxb);
+				il_tx_cmd_complete(il, pkt);
 			else
 				IL_WARN("Claim null rxb?\n");
 		}

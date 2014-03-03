@@ -1145,7 +1145,7 @@ struct il_priv {
 	int alloc_rxb_page;
 
 	void (*handlers[IL_CN_MAX]) (struct il_priv *il,
-				     struct il_rx_buf *rxb);
+				     struct il_rx_pkt *pkt);
 
 	struct ieee80211_supported_band bands[IEEE80211_NUM_BANDS];
 
@@ -1739,10 +1739,10 @@ il_update_stats(struct il_priv *il, bool is_tx, __le16 fc, u16 len)
 /*****************************************************
  * Handlers
  ***************************************************/
-void il_hdl_pm_sleep(struct il_priv *il, struct il_rx_buf *rxb);
-void il_hdl_pm_debug_stats(struct il_priv *il, struct il_rx_buf *rxb);
-void il_hdl_error(struct il_priv *il, struct il_rx_buf *rxb);
-void il_hdl_csa(struct il_priv *il, struct il_rx_buf *rxb);
+void il_hdl_pm_sleep(struct il_priv *il, struct il_rx_pkt *pkt);
+void il_hdl_pm_debug_stats(struct il_priv *il, struct il_rx_pkt *pkt);
+void il_hdl_error(struct il_priv *il, struct il_rx_pkt *pkt);
+void il_hdl_csa(struct il_priv *il, struct il_rx_pkt *pkt);
 
 /*****************************************************
 * RX
@@ -1752,9 +1752,9 @@ void il_cmd_queue_free(struct il_priv *il);
 int il_rx_queue_alloc(struct il_priv *il);
 void il_rx_queue_update_write_ptr(struct il_priv *il, struct il_rx_queue *q);
 int il_rx_queue_space(const struct il_rx_queue *q);
-void il_tx_cmd_complete(struct il_priv *il, struct il_rx_buf *rxb);
+void il_tx_cmd_complete(struct il_priv *il, struct il_rx_pkt *pkt);
 
-void il_hdl_spectrum_measurement(struct il_priv *il, struct il_rx_buf *rxb);
+void il_hdl_spectrum_measurement(struct il_priv *il, struct il_rx_pkt *pkt);
 void il_recover_from_stats(struct il_priv *il, struct il_rx_pkt *pkt);
 void il_chswitch_done(struct il_priv *il, bool is_success);
 

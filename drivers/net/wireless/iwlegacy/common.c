@@ -1392,10 +1392,9 @@ EXPORT_SYMBOL(il_scan_cancel_timeout);
 
 /* Service response to C_SCAN (0x80) */
 static void
-il_hdl_scan(struct il_priv *il, struct il_rx_buf *rxb)
+il_hdl_scan(struct il_priv *il, struct il_rx_pkt *pkt)
 {
 #ifdef CONFIG_IWLEGACY_DEBUG
-	struct il_rx_pkt *pkt = rxb_addr(rxb);
 	struct il_scanreq_notification *notif =
 	    (struct il_scanreq_notification *)pkt->u.raw;
 
@@ -1405,9 +1404,8 @@ il_hdl_scan(struct il_priv *il, struct il_rx_buf *rxb)
 
 /* Service N_SCAN_START (0x82) */
 static void
-il_hdl_scan_start(struct il_priv *il, struct il_rx_buf *rxb)
+il_hdl_scan_start(struct il_priv *il, struct il_rx_pkt *pkt)
 {
-	struct il_rx_pkt *pkt = rxb_addr(rxb);
 	struct il_scanstart_notification *notif =
 	    (struct il_scanstart_notification *)pkt->u.raw;
 	il->scan_start_tsf = le32_to_cpu(notif->tsf_low);
@@ -1419,10 +1417,9 @@ il_hdl_scan_start(struct il_priv *il, struct il_rx_buf *rxb)
 
 /* Service N_SCAN_RESULTS (0x83) */
 static void
-il_hdl_scan_results(struct il_priv *il, struct il_rx_buf *rxb)
+il_hdl_scan_results(struct il_priv *il, struct il_rx_pkt *pkt)
 {
 #ifdef CONFIG_IWLEGACY_DEBUG
-	struct il_rx_pkt *pkt = rxb_addr(rxb);
 	struct il_scanresults_notification *notif =
 	    (struct il_scanresults_notification *)pkt->u.raw;
 
@@ -1436,17 +1433,15 @@ il_hdl_scan_results(struct il_priv *il, struct il_rx_buf *rxb)
 
 /* Service N_SCAN_COMPLETE (0x84) */
 static void
-il_hdl_scan_complete(struct il_priv *il, struct il_rx_buf *rxb)
+il_hdl_scan_complete(struct il_priv *il, struct il_rx_pkt *pkt)
 {
-
 #ifdef CONFIG_IWLEGACY_DEBUG
-	struct il_rx_pkt *pkt = rxb_addr(rxb);
 	struct il_scancomplete_notification *scan_notif = (void *)pkt->u.raw;
-#endif
 
 	D_SCAN("Scan complete: %d channels (TSF 0x%08X:%08X) - %d\n",
 	       scan_notif->scanned_channels, scan_notif->tsf_low,
 	       scan_notif->tsf_high, scan_notif->status);
+#endif
 
 	/* The HW is no longer scanning */
 	clear_bit(S_SCAN_HW, &il->status);
@@ -2645,9 +2640,8 @@ err_bd:
 EXPORT_SYMBOL(il_rx_queue_alloc);
 
 void
-il_hdl_spectrum_measurement(struct il_priv *il, struct il_rx_buf *rxb)
+il_hdl_spectrum_measurement(struct il_priv *il, struct il_rx_pkt *pkt)
 {
-	struct il_rx_pkt *pkt = rxb_addr(rxb);
 	struct il_spectrum_notification *report = &(pkt->u.spectrum_notif);
 
 	if (!report->state) {
@@ -3276,9 +3270,8 @@ il_hcmd_queue_reclaim(struct il_priv *il, int txq_id, int idx, int cmd_idx)
  * if the callback returns 1
  */
 void
-il_tx_cmd_complete(struct il_priv *il, struct il_rx_buf *rxb)
+il_tx_cmd_complete(struct il_priv *il, struct il_rx_pkt *pkt)
 {
-	struct il_rx_pkt *pkt = rxb_addr(rxb);
 	u16 sequence = le16_to_cpu(pkt->hdr.sequence);
 	int txq_id = SEQ_TO_QUEUE(sequence);
 	int idx = SEQ_TO_IDX(sequence);
@@ -4103,9 +4096,8 @@ il_chswitch_done(struct il_priv *il, bool is_success)
 EXPORT_SYMBOL(il_chswitch_done);
 
 void
-il_hdl_csa(struct il_priv *il, struct il_rx_buf *rxb)
+il_hdl_csa(struct il_priv *il, struct il_rx_pkt *pkt)
 {
-	struct il_rx_pkt *pkt = rxb_addr(rxb);
 	struct il_csa_notification *csa = &(pkt->u.csa_notif);
 	struct il_rxon_cmd *rxon = (void *)&il->active;
 
@@ -4444,10 +4436,9 @@ il_send_stats_request(struct il_priv *il, u8 flags, bool clear)
 EXPORT_SYMBOL(il_send_stats_request);
 
 void
-il_hdl_pm_sleep(struct il_priv *il, struct il_rx_buf *rxb)
+il_hdl_pm_sleep(struct il_priv *il, struct il_rx_pkt *pkt)
 {
 #ifdef CONFIG_IWLEGACY_DEBUG
-	struct il_rx_pkt *pkt = rxb_addr(rxb);
 	struct il_sleep_notification *sleep = &(pkt->u.sleep_notif);
 	D_RX("sleep mode: %d, src: %d\n",
 	     sleep->pm_sleep_mode, sleep->pm_wakeup_src);
@@ -4456,9 +4447,8 @@ il_hdl_pm_sleep(struct il_priv *il, struct il_rx_buf *rxb)
 EXPORT_SYMBOL(il_hdl_pm_sleep);
 
 void
-il_hdl_pm_debug_stats(struct il_priv *il, struct il_rx_buf *rxb)
+il_hdl_pm_debug_stats(struct il_priv *il, struct il_rx_pkt *pkt)
 {
-	struct il_rx_pkt *pkt = rxb_addr(rxb);
 	u32 len = le32_to_cpu(pkt->len_n_flags) & IL_RX_FRAME_SIZE_MSK;
 	D_RADIO("Dumping %d bytes of unhandled notification for %s:\n", len,
 		il_get_cmd_string(pkt->hdr.cmd));
@@ -4467,10 +4457,8 @@ il_hdl_pm_debug_stats(struct il_priv *il, struct il_rx_buf *rxb)
 EXPORT_SYMBOL(il_hdl_pm_debug_stats);
 
 void
-il_hdl_error(struct il_priv *il, struct il_rx_buf *rxb)
+il_hdl_error(struct il_priv *il, struct il_rx_pkt *pkt)
 {
-	struct il_rx_pkt *pkt = rxb_addr(rxb);
-
 	IL_ERR("Error Reply type 0x%08X cmd %s (0x%02X) "
 	       "seq 0x%04X ser 0x%08X\n",
 	       le32_to_cpu(pkt->u.err_resp.error_type),
