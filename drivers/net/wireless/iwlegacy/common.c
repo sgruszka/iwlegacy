@@ -372,14 +372,14 @@ il_send_cmd_sync(struct il_priv *il, struct il_host_cmd *cmd)
 	goto out;
 
 cancel:
-	if (cmd->flags & CMD_WANT_SKB) {
+	if (cmd->flags & (CMD_WANT_SKB | CMD_COPY_PKT)) {
 		/*
 		 * Cancel the CMD_WANT_SKB flag for the cmd in the
 		 * TX cmd queue. Otherwise in case the cmd comes
 		 * in later, it will possibly set an invalid
 		 * address (cmd->meta.source).
 		 */
-		il->txq[il->cmd_queue].meta[cmd_idx].flags &= ~CMD_WANT_SKB;
+		il->txq[il->cmd_queue].meta[cmd_idx].flags &= ~(CMD_WANT_SKB | CMD_COPY_PKT);
 	}
 fail:
 	if (cmd->reply_page) {
@@ -3172,7 +3172,7 @@ il_enqueue_hcmd(struct il_priv *il, struct il_host_cmd *cmd)
 
 	memset(out_meta, 0, sizeof(*out_meta));	/* re-initialize to NULL */
 	out_meta->flags = cmd->flags | CMD_MAPPED;
-	if (cmd->flags & CMD_WANT_SKB)
+	if (cmd->flags & (CMD_WANT_SKB | CMD_COPY_PKT))
 		out_meta->source = cmd;
 	if (cmd->flags & CMD_ASYNC)
 		out_meta->callback = cmd->callback;
@@ -3319,6 +3319,8 @@ il_tx_cmd_complete(struct il_priv *il, struct il_rx_buf *rxb)
 	if (meta->flags & CMD_WANT_SKB) {
 		meta->source->reply_page = (unsigned long)rxb_addr(rxb);
 		rxb->page = NULL;
+	} else if (meta->flags & CMD_COPY_PKT) {
+		memcpy(meta->source->pkt_ptr, pkt, sizeof(*pkt));
 	} else if (meta->callback)
 		meta->callback(il, cmd, pkt);
 
