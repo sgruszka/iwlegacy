@@ -907,10 +907,7 @@ il3945_rx_queue_update(struct il_priv *il)
 {
 	struct il_rx_queue *rxq = &il->rxq;
 	struct il_rx_buf *rxb;
-	unsigned long flags;
 	u32 end;
-
-	spin_lock_irqsave(&rxq->lock, flags);
 
 	end = (rxq->read - 2) & RX_QUEUE_MASK;
 	while (rxq->write != end) {
@@ -920,15 +917,13 @@ il3945_rx_queue_update(struct il_priv *il)
 	}
 
 	/* If we've added more space for the firmware to place data, tell it.
-	 * Increment device's write pointer in multiples of 8.
+	 x Increment device's write pointer in multiples of 8.
 	 */
 	if (rxq->write_actual != (rxq->write & ~0x7) ||
 	    abs(rxq->write - rxq->read) > 7) {
 		rxq->need_update = 1;
 		il_rx_queue_update_write_ptr(il, rxq);
 	}
-
-	spin_unlock_irqrestore(&rxq->lock, flags);
 }
 
 
@@ -1171,9 +1166,8 @@ il3945_irq_tasklet(struct il_priv *il)
 	/* uCode wakes up after power-down sleep */
 	if (inta & CSR_INT_BIT_WAKEUP) {
 		D_ISR("Wakeup interrupt\n");
-		spin_lock_irqsave(&il->rxq.lock, flags);
+
 		il_rx_queue_update_write_ptr(il, &il->rxq);
-		spin_unlock_irqrestore(&il->rxq.lock, flags);
 
 		spin_lock_irqsave(&il->lock, flags);
 		il_txq_update_write_ptr(il, &il->txq[0]);

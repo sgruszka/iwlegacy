@@ -595,7 +595,9 @@ struct il_host_cmd {
  * @rb_stts: driver's pointer to receive buffer status
  * @rb_stts_dma: bus address of receive buffer status
  *
- * NOTE:  rx_free and rx_used are used as a FIFO for il_rx_bufs
+ * NOTE: This structure has no lock since we modify it only on
+ * il{3945,4965}_irq_tasklet. Synchronization between up/down code
+ * is done by enabling/disabling interrupts properly.
  */
 struct il_rx_queue {
 	__le32 *bd;
@@ -607,7 +609,6 @@ struct il_rx_queue {
 	int need_update;
 	struct il_rb_status *rb_stts;
 	dma_addr_t rb_stts_dma;
-	spinlock_t lock;
 };
 
 #define IL_SUPPORTED_RATES_IE_LEN         8

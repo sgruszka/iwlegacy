@@ -2511,8 +2511,6 @@ il_rx_queue_update_write_ptr(struct il_priv *il, struct il_rx_queue *q)
 	const u32 rx_wrt_ptr_reg = il->hw_params.rx_wrt_ptr_reg;
 	u32 reg;
 
-	lockdep_assert_held(&q->lock);
-
 	if (q->need_update == 0)
 		return;
 
@@ -2636,8 +2634,6 @@ il_rx_queue_alloc(struct il_priv *il)
 	struct il_rx_queue *rxq = &il->rxq;
 	struct device *dev = &il->pci_dev->dev;
 
-	spin_lock_init(&rxq->lock);
-
 	/* Alloc the circular buffer of Read Buffer Descriptors (RBDs) */
 	rxq->bd = dma_alloc_coherent(dev, 4 * RX_QUEUE_SIZE, &rxq->bd_dma,
 				     GFP_KERNEL);
@@ -2672,12 +2668,9 @@ void
 il_rx_queue_reset(struct il_priv *il)
 {
 	struct il_rx_queue *rxq = &il->rxq;
-	unsigned long flags;
 
-	spin_lock_irqsave(&rxq->lock, flags);
 	rxq->read = rxq->write = 0;
 	rxq->write_actual = 0;
-	spin_unlock_irqrestore(&rxq->lock, flags);
 }
 EXPORT_SYMBOL(il_rx_queue_reset);
 
@@ -2691,7 +2684,6 @@ il_pass_packet_to_mac80211(struct il_priv *il, struct il_rx_buf *rxb,
 	struct sk_buff *skb;
 	struct page *page, *new_page;
 	dma_addr_t page_dma, new_page_dma;
-	unsigned long flags;
 
 	if (len > SMALL_PACKET_SIZE) {
 		/* We have to pass pages to mac80211 and allocate new pages
@@ -2702,12 +2694,10 @@ il_pass_packet_to_mac80211(struct il_priv *il, struct il_rx_buf *rxb,
 			return;
 
 		page_dma = rxb->page_dma;
-		page = rxb->page;
-
-		spin_lock_irqsave(&il->rxq.lock, flags);
 		rxb->page_dma = new_page_dma;
+
+		page = rxb->page;
 		rxb->page = new_page;
-		spin_unlock_irqrestore(&il->rxq.lock, flags);
 	}
 
 	skb = dev_alloc_skb(SMALL_PACKET_SIZE);
