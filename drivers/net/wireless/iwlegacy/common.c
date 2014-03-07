@@ -2503,23 +2503,6 @@ EXPORT_SYMBOL(il_mac_sta_remove);
  */
 
 /**
- * il_rx_queue_space - Return number of free slots available in queue.
- */
-int
-il_rx_queue_space(const struct il_rx_queue *q)
-{
-	int s = q->read - q->write;
-	if (s <= 0)
-		s += RX_QUEUE_SIZE;
-	/* keep some buffer to not confuse full and empty queue */
-	s -= 2;
-	if (s < 0)
-		s = 0;
-	return s;
-}
-EXPORT_SYMBOL(il_rx_queue_space);
-
-/**
  * il_rx_queue_update_write_ptr - Update the write pointer for the RX queue
  */
 void

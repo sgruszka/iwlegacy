@@ -908,10 +908,12 @@ il3945_rx_queue_update(struct il_priv *il)
 	struct il_rx_queue *rxq = &il->rxq;
 	struct il_rx_buf *rxb;
 	unsigned long flags;
+	u32 end;
 
 	spin_lock_irqsave(&rxq->lock, flags);
 
-	while (il_rx_queue_space(rxq) > 0) {
+	end = (rxq->read - 2) & RX_QUEUE_MASK;
+	while (rxq->write != end) {
 		rxb = &rxq->queue[rxq->write];
 		rxq->bd[rxq->write] = cpu_to_le32((u32)rxb->page_dma);
 		rxq->write = (rxq->write + 1) & RX_QUEUE_MASK;
@@ -948,7 +950,7 @@ il3945_rx_handle(struct il_priv *il)
 
 	/* uCode's read idx (stored in shared DRAM) indicates the last Rx
 	 * buffer that the driver may process (last buffer filled by ucode). */
-	r = le16_to_cpu(rxq->rb_stts->closed_rb_num) & 0x0FFF;
+	r = le16_to_cpu(rxq->rb_stts->closed_rb_num) & RX_QUEUE_MASK;
 	i = rxq->read;
 
 	/* Rx interrupt, but nothing sent from uCode */
