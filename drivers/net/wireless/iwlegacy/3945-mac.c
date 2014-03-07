@@ -969,7 +969,7 @@ il3945_rx_handle(struct il_priv *il)
 				il->handlers[pkt->hdr.cmd] (il, pkt);
 			}
 
-			if (il_need_reclaim(il, pkt)) {
+			if (il_need_tx_cmd_complete(il, pkt)) {
 				/* Invoke any callbacks, transfer the buffer
 				 * to caller, and fire off the (possibly)
 				 * blocking il_send_cmd().

@@ -1958,7 +1958,8 @@ void il_wr_prph(struct il_priv *il, u32 addr, u32 val);
 u32 il_read_targ_mem(struct il_priv *il, u32 addr);
 void il_write_targ_mem(struct il_priv *il, u32 addr, u32 val);
 
-static inline bool il_need_reclaim(struct il_priv *il, struct il_rx_pkt *pkt)
+static inline bool
+il_need_tx_cmd_complete(struct il_priv *il, struct il_rx_pkt *pkt)
 {
 	/* Reclaim a command buffer only if this packet is a response
 	 * to a (driver-originated) command. If the packet (e.g. Rx frame)
@@ -1968,8 +1969,7 @@ static inline bool il_need_reclaim(struct il_priv *il, struct il_rx_pkt *pkt)
 	 */
 	return !(pkt->hdr.sequence & SEQ_RX_FRAME) &&
 	       pkt->hdr.cmd != N_STATS && pkt->hdr.cmd != C_TX &&
-	       pkt->hdr.cmd != N_RX_PHY && pkt->hdr.cmd != N_RX &&
-	       pkt->hdr.cmd != N_RX_MPDU && pkt->hdr.cmd != N_COMPRESSED_BA;
+	       pkt->hdr.cmd != N_RX_PHY && pkt->hdr.cmd != N_COMPRESSED_BA;
 }
 
 static inline void
