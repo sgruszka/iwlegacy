@@ -1803,7 +1803,8 @@ int il_send_cmd_pdu_async(struct il_priv *il, u8 id, u16 len, const void *data,
 					    struct il_device_cmd *cmd,
 					    struct il_rx_pkt *pkt));
 
-int il_enqueue_hcmd(struct il_priv *il, struct il_host_cmd *cmd);
+struct il_cmd_meta *
+il_enqueue_hcmd(struct il_priv *il, struct il_host_cmd *cmd);
 
 /*****************************************************
  * PCI						     *

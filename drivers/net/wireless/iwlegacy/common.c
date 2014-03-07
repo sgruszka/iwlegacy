@@ -281,6 +281,7 @@ il_generic_cmd_callback(struct il_priv *il, struct il_device_cmd *cmd,
 static int
 il_send_cmd_async(struct il_priv *il, struct il_host_cmd *cmd)
 {
+	struct il_cmd_meta *meta;
 	int ret;
 
 	BUG_ON(!(cmd->flags & CMD_ASYNC));
@@ -292,8 +293,9 @@ il_send_cmd_async(struct il_priv *il, struct il_host_cmd *cmd)
 	if (test_bit(S_EXIT_PENDING, &il->status))
 		return -EBUSY;
 
-	ret = il_enqueue_hcmd(il, cmd);
-	if (ret < 0) {
+	meta = il_enqueue_hcmd(il, cmd);
+	if (IS_ERR(meta)) {
+		ret = PTR_ERR(meta);
 		IL_ERR("Error sending %s: enqueue_hcmd failed: %d\n",
 		       il_get_cmd_string(cmd->id), ret);
 		return ret;
@@ -304,7 +306,7 @@ il_send_cmd_async(struct il_priv *il, struct il_host_cmd *cmd)
 int
 il_send_cmd_sync(struct il_priv *il, struct il_host_cmd *cmd)
 {
-	int cmd_idx;
+	struct il_cmd_meta *meta;
 	int ret;
 
 	lockdep_assert_held(&il->mutex);
@@ -321,59 +323,53 @@ il_send_cmd_sync(struct il_priv *il, struct il_host_cmd *cmd)
 	D_INFO("Setting HCMD_ACTIVE for command %s\n",
 	       il_get_cmd_string(cmd->id));
 
-	cmd_idx = il_enqueue_hcmd(il, cmd);
-	if (cmd_idx < 0) {
-		ret = cmd_idx;
+	meta = il_enqueue_hcmd(il, cmd);
+	if (IS_ERR(meta)) {
+		ret = PTR_ERR(meta);
 		IL_ERR("Error sending %s: enqueue_hcmd failed: %d\n",
 		       il_get_cmd_string(cmd->id), ret);
-		goto out;
+		return ret;
 	}
 
 	ret = wait_event_timeout(il->wait_command_queue,
 				 !test_bit(S_HCMD_ACTIVE, &il->status),
 				 HOST_COMPLETE_TIMEOUT);
-	if (!ret) {
-		if (test_bit(S_HCMD_ACTIVE, &il->status)) {
-			IL_ERR("Error sending %s: time out after %dms.\n",
-			       il_get_cmd_string(cmd->id),
-			       jiffies_to_msecs(HOST_COMPLETE_TIMEOUT));
 
-			clear_bit(S_HCMD_ACTIVE, &il->status);
-			D_INFO("Clearing HCMD_ACTIVE for command %s\n",
-			       il_get_cmd_string(cmd->id));
-			ret = -ETIMEDOUT;
-			goto cancel;
+	if (!ret && test_bit(S_HCMD_ACTIVE, &il->status)) {
+		IL_ERR("Error sending %s: time out after %dms.\n",
+		       il_get_cmd_string(cmd->id),
+		       jiffies_to_msecs(HOST_COMPLETE_TIMEOUT));
+
+		clear_bit(S_HCMD_ACTIVE, &il->status);
+		D_INFO("Clearing HCMD_ACTIVE for command %s\n",
+		       il_get_cmd_string(cmd->id));
+
+		if (cmd->flags & CMD_COPY_PKT) {
+			/* Cancel CMD_COPY_PKT flag for the meta in the command
+			 * queue. Otherwise in case command will be returned by
+			 * by firmware later, we possible can copy to an invalid
+			 * address at meta->source->pkt_ptr .
+			 */
+			spin_lock_irq(&il->hcmd_lock);
+			meta->flags &= ~CMD_COPY_PKT;
+			spin_unlock_irq(&il->hcmd_lock);
 		}
+		return  -ETIMEDOUT;
 	}
 
 	if (test_bit(S_RFKILL, &il->status)) {
 		IL_ERR("Command %s aborted: RF KILL Switch\n",
 		       il_get_cmd_string(cmd->id));
-		ret = -ECANCELED;
-		goto out;
+		return -ECANCELED;
 	}
+
 	if (test_bit(S_FW_ERROR, &il->status)) {
 		IL_ERR("Command %s failed: FW Error\n",
 		       il_get_cmd_string(cmd->id));
-		ret = -EIO;
-		goto out;
+		return -EIO;
 	}
 
-	ret = 0;
-	goto out;
-
-cancel:
-	if (cmd->flags & CMD_COPY_PKT) {
-		/*
-		 * Cancel the CMD_COPY_PKT flag for the cmd in the
-		 * TX cmd queue. Otherwise in case the cmd comes
-		 * in later, it will possibly set an invalid
-		 * address (cmd->meta.source).
-		 */
-		il->txq[il->cmd_queue].meta[cmd_idx].flags &= ~CMD_COPY_PKT;
-	}
-out:
-	return ret;
+	return 0;
 }
 EXPORT_SYMBOL(il_send_cmd_sync);
 
@@ -3184,7 +3180,7 @@ EXPORT_SYMBOL(il_tx_queue_reset);
  * failed. On success, it turns the idx (> 0) of command in the
  * command queue.
  */
-int
+struct il_cmd_meta *
 il_enqueue_hcmd(struct il_priv *il, struct il_host_cmd *cmd)
 {
 	struct il_tx_queue *txq = &il->txq[il->cmd_queue];
@@ -3212,7 +3208,7 @@ il_enqueue_hcmd(struct il_priv *il, struct il_host_cmd *cmd)
 	if (il_is_rfkill(il) || il_is_ctkill(il)) {
 		IL_WARN("Not sending command - %s KILL\n",
 			il_is_rfkill(il) ? "RF" : "CT");
-		return -EIO;
+		return ERR_PTR(-EIO);
 	}
 
 	spin_lock_irqsave(&il->hcmd_lock, flags);
@@ -3222,7 +3218,7 @@ il_enqueue_hcmd(struct il_priv *il, struct il_host_cmd *cmd)
 
 		IL_ERR("Restarting adapter due to command queue full\n");
 		queue_work(il->workqueue, &il->restart);
-		return -ENOSPC;
+		return ERR_PTR(-ENOSPC);
 	}
 
 	idx = il_get_cmd_idx(q, q->write_ptr, cmd->flags & CMD_SIZE_HUGE);
@@ -3231,7 +3227,7 @@ il_enqueue_hcmd(struct il_priv *il, struct il_host_cmd *cmd)
 
 	if (WARN_ON(out_meta->flags & CMD_MAPPED)) {
 		spin_unlock_irqrestore(&il->hcmd_lock, flags);
-		return -ENOSPC;
+		return ERR_PTR(-ENOSPC);
 	}
 
 	memset(out_meta, 0, sizeof(*out_meta));	/* re-initialize to NULL */
@@ -3281,7 +3277,7 @@ il_enqueue_hcmd(struct il_priv *il, struct il_host_cmd *cmd)
 	if (unlikely(pci_dma_mapping_error(il->pci_dev, phys_addr))) {
 		out_meta->flags = 0;
 		spin_unlock_irqrestore(&il->hcmd_lock, flags);
-		return -ENOMEM;
+		return ERR_PTR(-ENOMEM);
 	}
 	dma_unmap_addr_set(out_meta, mapping, phys_addr);
 	dma_unmap_len_set(out_meta, len, fix_size);
@@ -3300,7 +3296,7 @@ il_enqueue_hcmd(struct il_priv *il, struct il_host_cmd *cmd)
 	il_txq_update_wptr(il, txq);
 
 	spin_unlock_irqrestore(&il->hcmd_lock, flags);
-	return idx;
+	return out_meta;
 }
 
 /**
@@ -3378,12 +3374,13 @@ il_tx_cmd_complete(struct il_priv *il, struct il_rx_pkt *pkt)
 	pci_unmap_single(il->pci_dev, dma_unmap_addr(meta, mapping),
 			 dma_unmap_len(meta, len), PCI_DMA_BIDIRECTIONAL);
 
-	if (meta->flags & CMD_COPY_PKT)
-		memcpy(meta->source->pkt_ptr, pkt, sizeof(*pkt));
-	else if (meta->callback)
+	if (meta->callback)
 		meta->callback(il, cmd, pkt);
 
 	spin_lock_irqsave(&il->hcmd_lock, flags);
+
+	if (meta->flags & CMD_COPY_PKT)
+		memcpy(meta->source->pkt_ptr, pkt, sizeof(*pkt));
 
 	il_hcmd_queue_reclaim(il, txq_id, idx, cmd_idx);
 
