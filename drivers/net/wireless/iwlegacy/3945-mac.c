@@ -637,14 +637,14 @@ il3945_tx_skb(struct il_priv *il,
 
 	/* Tell device the write idx *just past* this latest filled TFD */
 	q->write_ptr = il_queue_inc_wrap(q->write_ptr, q->n_bd);
-	il_txq_update_write_ptr(il, txq);
+	il_txq_update_wptr(il, txq);
 	spin_unlock_irqrestore(&il->lock, flags);
 
 	if (il_queue_space(q) < q->high_mark && il->mac80211_registered) {
 		if (wait_write_ptr) {
 			spin_lock_irqsave(&il->lock, flags);
 			txq->need_update = 1;
-			il_txq_update_write_ptr(il, txq);
+			il_txq_update_wptr(il, txq);
 			spin_unlock_irqrestore(&il->lock, flags);
 		}
 
@@ -1163,11 +1163,11 @@ il3945_irq_tasklet(struct il_priv *il)
 		il_rxq_update_wptr(il, &il->rxq);
 
 		spin_lock_irqsave(&il->lock, flags);
-		il_txq_update_write_ptr(il, &il->txq[0]);
-		il_txq_update_write_ptr(il, &il->txq[1]);
-		il_txq_update_write_ptr(il, &il->txq[2]);
-		il_txq_update_write_ptr(il, &il->txq[3]);
-		il_txq_update_write_ptr(il, &il->txq[4]);
+		il_txq_update_wptr(il, &il->txq[0]);
+		il_txq_update_wptr(il, &il->txq[1]);
+		il_txq_update_wptr(il, &il->txq[2]);
+		il_txq_update_wptr(il, &il->txq[3]);
+		il_txq_update_wptr(il, &il->txq[4]);
 		spin_unlock_irqrestore(&il->lock, flags);
 
 		il->isr_stats.wakeup++;

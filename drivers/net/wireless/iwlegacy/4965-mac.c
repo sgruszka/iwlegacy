@@ -1655,7 +1655,7 @@ il4965_tx_skb(struct il_priv *il,
 
 	/* Tell device the write idx *just past* this latest filled TFD */
 	q->write_ptr = il_queue_inc_wrap(q->write_ptr, q->n_bd);
-	il_txq_update_write_ptr(il, txq);
+	il_txq_update_wptr(il, txq);
 	spin_unlock_irqrestore(&il->lock, flags);
 
 	/*
@@ -1679,7 +1679,7 @@ il4965_tx_skb(struct il_priv *il,
 		if (wait_write_ptr) {
 			spin_lock_irqsave(&il->lock, flags);
 			txq->need_update = 1;
-			il_txq_update_write_ptr(il, txq);
+			il_txq_update_wptr(il, txq);
 			spin_unlock_irqrestore(&il->lock, flags);
 		} else {
 			il_stop_queue(il, txq);
@@ -4192,7 +4192,7 @@ il4965_irq_tasklet(struct il_priv *il)
 		il_rxq_update_wptr(il, &il->rxq);
 
 		for (i = 0; i < il->hw_params.max_txq_num; i++)
-			il_txq_update_write_ptr(il, &il->txq[i]);
+			il_txq_update_wptr(il, &il->txq[i]);
 		il->isr_stats.wakeup++;
 		handled |= CSR_INT_BIT_WAKEUP;
 	}

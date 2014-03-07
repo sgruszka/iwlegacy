@@ -1740,7 +1740,7 @@ void il_chswitch_done(struct il_priv *il, bool is_success);
 /*****************************************************
 * TX
 ******************************************************/
-void il_txq_update_write_ptr(struct il_priv *il, struct il_tx_queue *txq);
+void il_txq_update_wptr(struct il_priv *il, struct il_tx_queue *txq);
 int il_tx_queue_init(struct il_priv *il, u32 txq_id);
 void il_tx_queue_reset(struct il_priv *il, u32 txq_id);
 void il_tx_queue_unmap(struct il_priv *il, int txq_id);

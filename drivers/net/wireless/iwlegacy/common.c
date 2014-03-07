@@ -2783,10 +2783,10 @@ il_set_decrypted_flag(struct il_priv *il, struct ieee80211_hdr *hdr,
 EXPORT_SYMBOL(il_set_decrypted_flag);
 
 /**
- * il_txq_update_write_ptr - Send new write idx to hardware
+ * il_txq_update_wptr - Send new write idx to hardware
  */
 void
-il_txq_update_write_ptr(struct il_priv *il, struct il_tx_queue *txq)
+il_txq_update_wptr(struct il_priv *il, struct il_tx_queue *txq)
 {
 	u32 reg = 0;
 	int txq_id = txq->q.id;
@@ -2820,7 +2820,7 @@ il_txq_update_write_ptr(struct il_priv *il, struct il_tx_queue *txq)
 		_il_wr(il, HBUS_TARG_WRPTR, txq->q.write_ptr | (txq_id << 8));
 	txq->need_update = 0;
 }
-EXPORT_SYMBOL(il_txq_update_write_ptr);
+EXPORT_SYMBOL(il_txq_update_wptr);
 
 /**
  * il_tx_queue_unmap -  Unmap any remaining DMA mappings and free skb's
@@ -3298,7 +3298,7 @@ il_enqueue_hcmd(struct il_priv *il, struct il_host_cmd *cmd)
 
 	/* Increment and update queue's write idx */
 	q->write_ptr = il_queue_inc_wrap(q->write_ptr, q->n_bd);
-	il_txq_update_write_ptr(il, txq);
+	il_txq_update_wptr(il, txq);
 
 out:
 	spin_unlock_irqrestore(&il->hcmd_lock, flags);
