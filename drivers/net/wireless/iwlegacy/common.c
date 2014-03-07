@@ -2676,37 +2676,35 @@ il_pass_packet_to_mac80211(struct il_priv *il, struct il_rx_buf *rxb,
 	struct page *page, *new_page;
 	dma_addr_t page_dma, new_page_dma;
 
+	skb = dev_alloc_skb(SMALL_PACKET_SIZE);
+	if (!skb) {
+		IL_ERR("dev_alloc_skb failed\n");
+		return;
+	}
+
 	if (len > SMALL_PACKET_SIZE) {
 		/* We have to pass pages to mac80211 and allocate new pages
 		 * as receive buffer. Drop packet if no memory.
 		 */
 		new_page = il_alloc_rx_pages(il, &new_page_dma, GFP_ATOMIC);
-		if (!new_page)
+		if (!new_page) {
+			dev_kfree_skb(skb);
 			return;
+		}
 
 		page_dma = rxb->page_dma;
 		rxb->page_dma = new_page_dma;
 
 		page = rxb->page;
 		rxb->page = new_page;
-	}
 
-	skb = dev_alloc_skb(SMALL_PACKET_SIZE);
-	if (!skb) {
-		if (len > SMALL_PACKET_SIZE)
-			il_free_rx_pages(il, page, page_dma);
-		IL_ERR("dev_alloc_skb failed\n");
-		return;
-	}
-
-	/* If frame is small enough to fit into skb->head, copy it
-	 * and do not consume a full page.
-	 */
-	if (len <= SMALL_PACKET_SIZE) {
-		memcpy(skb_put(skb, len), hdr, len);
-	} else {
 		skb_add_rx_frag(skb, 0, page, (void *)hdr - page_address(page),
 				len, IL_RX_PG_SIZE(il));
+	} else {
+		/* If frame is small enough to fit into skb->head, copy it
+		 * and do not consume a full page.
+		 */
+		memcpy(skb_put(skb, len), hdr, len);
 	}
 
 	il_update_stats(il, false, fc, len);
