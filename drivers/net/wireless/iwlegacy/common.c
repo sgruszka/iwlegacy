@@ -3279,8 +3279,9 @@ il_enqueue_hcmd(struct il_priv *il, struct il_host_cmd *cmd)
 	    pci_map_single(il->pci_dev, &out_cmd->hdr, fix_size,
 			   PCI_DMA_BIDIRECTIONAL);
 	if (unlikely(pci_dma_mapping_error(il->pci_dev, phys_addr))) {
-		idx = -ENOMEM;
-		goto out;
+		out_meta->flags = 0;
+		spin_unlock_irqrestore(&il->hcmd_lock, flags);
+		return -ENOMEM;
 	}
 	dma_unmap_addr_set(out_meta, mapping, phys_addr);
 	dma_unmap_len_set(out_meta, len, fix_size);
@@ -3298,7 +3299,6 @@ il_enqueue_hcmd(struct il_priv *il, struct il_host_cmd *cmd)
 	q->write_ptr = il_queue_inc_wrap(q->write_ptr, q->n_bd);
 	il_txq_update_wptr(il, txq);
 
-out:
 	spin_unlock_irqrestore(&il->hcmd_lock, flags);
 	return idx;
 }
