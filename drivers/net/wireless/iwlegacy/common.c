@@ -253,8 +253,6 @@ il_get_cmd_string(u8 cmd)
 }
 EXPORT_SYMBOL(il_get_cmd_string);
 
-#define HOST_COMPLETE_TIMEOUT (HZ / 2)
-
 static void
 il_generic_cmd_callback(struct il_priv *il, struct il_device_cmd *cmd,
 			struct il_rx_pkt *pkt)
@@ -264,18 +262,9 @@ il_generic_cmd_callback(struct il_priv *il, struct il_device_cmd *cmd,
 		       il_get_cmd_string(cmd->hdr.cmd), pkt->hdr.flags);
 		return;
 	}
-#ifdef CONFIG_IWLEGACY_DEBUG
-	switch (cmd->hdr.cmd) {
-	case C_TX_LINK_QUALITY_CMD:
-	case C_SENSITIVITY:
-		D_HC_DUMP("back from %s (0x%08X)\n",
-			  il_get_cmd_string(cmd->hdr.cmd), pkt->hdr.flags);
-		break;
-	default:
-		D_HC("back from %s (0x%08X)\n", il_get_cmd_string(cmd->hdr.cmd),
-		     pkt->hdr.flags);
-	}
-#endif
+
+	D_HC("back from %s (0x%08X)\n", il_get_cmd_string(cmd->hdr.cmd),
+	     pkt->hdr.flags);
 }
 
 static int
@@ -306,6 +295,7 @@ il_send_cmd_async(struct il_priv *il, struct il_host_cmd *cmd)
 int
 il_send_cmd_sync(struct il_priv *il, struct il_host_cmd *cmd)
 {
+	const unsigned HOST_COMPLETE_TIMEOUT = HZ / 2;
 	struct il_cmd_meta *meta;
 	int ret;
 
@@ -3195,14 +3185,9 @@ il_enqueue_hcmd(struct il_priv *il, struct il_host_cmd *cmd)
 	cmd->len = il->ops->get_hcmd_size(cmd->id, cmd->len);
 	fix_size = (u16) (cmd->len + sizeof(out_cmd->hdr));
 
-	/* If any of the command structures end up being larger than
-	 * the TFD_MAX_PAYLOAD_SIZE, and it sent as a 'small' command then
-	 * we will need to increase the size of the TFD entries
-	 * Also, check to see if command buffer should not exceed the size
-	 * of device_cmd and max_cmd_size. */
-	BUG_ON((fix_size > TFD_MAX_PAYLOAD_SIZE) &&
-	       !(cmd->flags & CMD_SIZE_HUGE));
-	BUG_ON(fix_size > IL_MAX_CMD_SIZE);
+	if (WARN_ON_ONCE(fix_size > TFD_MAX_PAYLOAD_SIZE &&
+			 !(cmd->flags & CMD_SIZE_HUGE)))
+		return ERR_PTR(-EIO);
 
 	if (il_is_rfkill(il) || il_is_ctkill(il)) {
 		IL_WARN("Not sending command - %s KILL\n",
@@ -3248,25 +3233,6 @@ il_enqueue_hcmd(struct il_priv *il, struct il_host_cmd *cmd)
 	if (cmd->flags & CMD_SIZE_HUGE)
 		out_cmd->hdr.sequence |= SEQ_HUGE_FRAME;
 
-#ifdef CONFIG_IWLEGACY_DEBUG
-	switch (out_cmd->hdr.cmd) {
-	case C_TX_LINK_QUALITY_CMD:
-	case C_SENSITIVITY:
-		D_HC_DUMP("Sending command %s (#%x), seq: 0x%04X, "
-			  "%d bytes at %d[%d]:%d\n",
-			  il_get_cmd_string(out_cmd->hdr.cmd), out_cmd->hdr.cmd,
-			  le16_to_cpu(out_cmd->hdr.sequence), fix_size,
-			  q->write_ptr, idx, il->cmd_queue);
-		break;
-	default:
-		D_HC("Sending command %s (#%x), seq: 0x%04X, "
-		     "%d bytes at %d[%d]:%d\n",
-		     il_get_cmd_string(out_cmd->hdr.cmd), out_cmd->hdr.cmd,
-		     le16_to_cpu(out_cmd->hdr.sequence), fix_size, q->write_ptr,
-		     idx, il->cmd_queue);
-	}
-#endif
-
 	phys_addr =
 	    pci_map_single(il->pci_dev, &out_cmd->hdr, fix_size,
 			   PCI_DMA_BIDIRECTIONAL);
@@ -3280,14 +3246,19 @@ il_enqueue_hcmd(struct il_priv *il, struct il_host_cmd *cmd)
 
 	txq->need_update = 1;
 
+	/* Set up entry in queue's byte count circular buffer */
 	if (il->ops->txq_update_byte_cnt_tbl)
-		/* Set up entry in queue's byte count circular buffer */
 		il->ops->txq_update_byte_cnt_tbl(il, txq, 0);
 
 	il->ops->txq_attach_buf_to_tfd(il, txq, phys_addr, fix_size, 1,
 					    U32_PAD(cmd->len));
 
-	/* Increment and update queue's write idx */
+	D_HC("Sending command %s (#%x), seq: 0x%04X, %d bytes at %d[%d]:%d\n",
+	     il_get_cmd_string(out_cmd->hdr.cmd), out_cmd->hdr.cmd,
+	     le16_to_cpu(out_cmd->hdr.sequence), fix_size, q->write_ptr,
+	     idx, il->cmd_queue);
+
+	/* Increment and update queue's write idx. */
 	q->write_ptr = il_queue_inc_wrap(q->write_ptr, q->n_bd);
 	il_txq_update_wptr(il, txq);
 
@@ -3349,14 +3320,7 @@ il_tx_cmd_complete(struct il_priv *il, struct il_rx_pkt *pkt)
 	struct il_tx_queue *txq = &il->txq[il->cmd_queue];
 	unsigned long flags;
 
-	/* If a Tx command is being handled and it isn't in the actual
-	 * command queue then there a command routing bug has been introduced
-	 * in the queue management code. */
-	if (WARN
-	    (txq_id != il->cmd_queue,
-	     "wrong command queue %d (should be %d), sequence 0x%X readp=%d writep=%d\n",
-	     txq_id, il->cmd_queue, sequence, il->txq[il->cmd_queue].q.read_ptr,
-	     il->txq[il->cmd_queue].q.write_ptr)) {
+	if (WARN_ON_ONCE(txq_id != il->cmd_queue)) {
 		il_print_hex_error(il, pkt, 32);
 		return;
 	}
