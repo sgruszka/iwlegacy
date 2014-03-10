@@ -224,7 +224,7 @@ il4965_rx_queue_update(struct il_priv *il)
 		rxq->write = (rxq->write + 1) & RX_QUEUE_MASK;
 	}
 
-	il_rx_queue_update_write_ptr(il, rxq);
+	il_rxq_update_wptr(il, rxq);
 }
 
 int
@@ -4189,7 +4189,7 @@ il4965_irq_tasklet(struct il_priv *il)
 	if (inta & CSR_INT_BIT_WAKEUP) {
 		D_ISR("Wakeup interrupt\n");
 
-		il_rx_queue_update_write_ptr(il, &il->rxq);
+		il_rxq_update_wptr(il, &il->rxq);
 
 		for (i = 0; i < il->hw_params.max_txq_num; i++)
 			il_txq_update_write_ptr(il, &il->txq[i]);

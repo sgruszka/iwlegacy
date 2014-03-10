@@ -2503,10 +2503,10 @@ EXPORT_SYMBOL(il_mac_sta_remove);
  */
 
 /**
- * il_rx_queue_update_write_ptr - Update the write pointer for the RX queue
+ * il_rxq_update_wptr - Update the write pointer for the RX queue
  */
 void
-il_rx_queue_update_write_ptr(struct il_priv *il, struct il_rx_queue *rxq)
+il_rxq_update_wptr(struct il_priv *il, struct il_rx_queue *rxq)
 {
 	const u32 rx_wrt_ptr_reg = il->hw_params.rx_wrt_ptr_reg;
 	u32 reg;
@@ -2530,7 +2530,7 @@ il_rx_queue_update_write_ptr(struct il_priv *il, struct il_rx_queue *rxq)
 	rxq->write_actual = (rxq->write & ~0x7);
 	il_wr(il, rx_wrt_ptr_reg, rxq->write_actual);
 }
-EXPORT_SYMBOL(il_rx_queue_update_write_ptr);
+EXPORT_SYMBOL(il_rxq_update_wptr);
 
 static void
 il_free_rx_pages(struct il_priv *il, struct page *page, dma_addr_t page_dma)

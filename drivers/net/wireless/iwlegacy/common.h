@@ -1725,7 +1725,7 @@ void il_cmd_queue_unmap(struct il_priv *il);
 void il_cmd_queue_free(struct il_priv *il);
 int il_rx_queue_alloc(struct il_priv *il);
 void il_rx_queue_free(struct il_priv *il);
-void il_rx_queue_update_write_ptr(struct il_priv *il, struct il_rx_queue *q);
+void il_rxq_update_wptr(struct il_priv *il, struct il_rx_queue *q);
 void il_rx_queue_reset(struct il_priv *il);
 int il_rx_queue_space(const struct il_rx_queue *q);
 void il_pass_packet_to_mac80211(struct il_priv *il, struct il_rx_buf *rxb,
