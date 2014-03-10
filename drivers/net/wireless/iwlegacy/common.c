@@ -3171,22 +3171,22 @@ EXPORT_SYMBOL(il_tx_queue_reset);
  * command queue.
  */
 struct il_cmd_meta *
-il_enqueue_hcmd(struct il_priv *il, struct il_host_cmd *cmd)
+il_enqueue_hcmd(struct il_priv *il, struct il_host_cmd *hcmd)
 {
 	struct il_tx_queue *txq = &il->txq[il->cmd_queue];
 	struct il_queue *q = &txq->q;
-	struct il_device_cmd *out_cmd;
-	struct il_cmd_meta *out_meta;
-	dma_addr_t phys_addr;
+	struct il_device_cmd *dcmd;
+	struct il_cmd_meta *meta;
+	dma_addr_t dev_addr;
+	u16 dev_size;
 	unsigned long flags;
 	u32 idx;
-	u16 fix_size;
 
-	cmd->len = il->ops->get_hcmd_size(cmd->id, cmd->len);
-	fix_size = (u16) (cmd->len + sizeof(out_cmd->hdr));
+	hcmd->len = il->ops->get_hcmd_size(hcmd->id, hcmd->len);
+	dev_size = hcmd->len + sizeof(dcmd->hdr);
 
-	if (WARN_ON_ONCE(fix_size > TFD_MAX_PAYLOAD_SIZE &&
-			 !(cmd->flags & CMD_SIZE_HUGE)))
+	if (WARN_ON_ONCE(dev_size > TFD_MAX_PAYLOAD_SIZE &&
+			 !(hcmd->flags & CMD_SIZE_HUGE)))
 		return ERR_PTR(-EIO);
 
 	if (il_is_rfkill(il) || il_is_ctkill(il)) {
@@ -3197,93 +3197,76 @@ il_enqueue_hcmd(struct il_priv *il, struct il_host_cmd *cmd)
 
 	spin_lock_irqsave(&il->hcmd_lock, flags);
 
-	if (il_queue_space(q) < ((cmd->flags & CMD_ASYNC) ? 2 : 1)) {
+	if (il_queue_space(q) < ((hcmd->flags & CMD_ASYNC) ? 2 : 1)) {
 		spin_unlock_irqrestore(&il->hcmd_lock, flags);
-
 		IL_ERR("Restarting adapter due to command queue full\n");
 		queue_work(il->workqueue, &il->restart);
 		return ERR_PTR(-ENOSPC);
 	}
 
-	idx = il_get_cmd_idx(q, q->write_ptr, cmd->flags & CMD_SIZE_HUGE);
-	out_cmd = txq->cmd[idx];
-	out_meta = &txq->meta[idx];
+	idx = il_get_cmd_idx(q, q->write_ptr, hcmd->flags & CMD_SIZE_HUGE);
+	dcmd = txq->cmd[idx];
+	meta = &txq->meta[idx];
 
-	if (WARN_ON(out_meta->flags & CMD_MAPPED)) {
+	if (WARN_ON(meta->flags & CMD_MAPPED)) {
 		spin_unlock_irqrestore(&il->hcmd_lock, flags);
 		return ERR_PTR(-ENOSPC);
 	}
 
-	memset(out_meta, 0, sizeof(*out_meta));	/* re-initialize to NULL */
-	out_meta->flags = cmd->flags | CMD_MAPPED;
-	if (cmd->flags & CMD_COPY_PKT)
-		out_meta->source = cmd;
-	if (cmd->flags & CMD_ASYNC)
-		out_meta->callback = cmd->callback;
+	meta->flags = hcmd->flags | CMD_MAPPED;
+	meta->hcmd = (hcmd->flags & CMD_COPY_PKT) ? hcmd : NULL;
+	meta->callback = (hcmd->flags & CMD_ASYNC) ? hcmd->callback : NULL;
 
-	out_cmd->hdr.cmd = cmd->id;
-	memcpy(&out_cmd->cmd.payload, cmd->data, cmd->len);
-
-	/* At this point, the out_cmd now has all of the incoming cmd
-	 * information */
-
-	out_cmd->hdr.flags = 0;
-	out_cmd->hdr.sequence =
+	dcmd->hdr.cmd = hcmd->id;
+	memcpy(&dcmd->cmd.payload, hcmd->data, hcmd->len);
+	dcmd->hdr.flags = 0;
+	dcmd->hdr.sequence =
 	    cpu_to_le16(QUEUE_TO_SEQ(il->cmd_queue) | IDX_TO_SEQ(q->write_ptr));
-	if (cmd->flags & CMD_SIZE_HUGE)
-		out_cmd->hdr.sequence |= SEQ_HUGE_FRAME;
+	if (hcmd->flags & CMD_SIZE_HUGE)
+		dcmd->hdr.sequence |= SEQ_HUGE_FRAME;
 
-	phys_addr =
-	    pci_map_single(il->pci_dev, &out_cmd->hdr, fix_size,
-			   PCI_DMA_BIDIRECTIONAL);
-	if (unlikely(pci_dma_mapping_error(il->pci_dev, phys_addr))) {
-		out_meta->flags = 0;
+	dev_addr = pci_map_single(il->pci_dev, &dcmd->hdr, dev_size,
+				  PCI_DMA_BIDIRECTIONAL);
+	if (unlikely(pci_dma_mapping_error(il->pci_dev, dev_addr))) {
+		meta->flags = 0;
 		spin_unlock_irqrestore(&il->hcmd_lock, flags);
 		return ERR_PTR(-ENOMEM);
 	}
-	dma_unmap_addr_set(out_meta, mapping, phys_addr);
-	dma_unmap_len_set(out_meta, len, fix_size);
-
-	txq->need_update = 1;
+	dma_unmap_addr_set(meta, mapping, dev_addr);
+	dma_unmap_len_set(meta, len, dev_size);
 
 	/* Set up entry in queue's byte count circular buffer */
 	if (il->ops->txq_update_byte_cnt_tbl)
 		il->ops->txq_update_byte_cnt_tbl(il, txq, 0);
 
-	il->ops->txq_attach_buf_to_tfd(il, txq, phys_addr, fix_size, 1,
-					    U32_PAD(cmd->len));
+	il->ops->txq_attach_buf_to_tfd(il, txq, dev_addr, dev_size, 1,
+				       U32_PAD(hcmd->len));
 
 	D_HC("Sending command %s (#%x), seq: 0x%04X, %d bytes at %d[%d]:%d\n",
-	     il_get_cmd_string(out_cmd->hdr.cmd), out_cmd->hdr.cmd,
-	     le16_to_cpu(out_cmd->hdr.sequence), fix_size, q->write_ptr,
+	     il_get_cmd_string(dcmd->hdr.cmd), dcmd->hdr.cmd,
+	     le16_to_cpu(dcmd->hdr.sequence), dev_size, q->write_ptr,
 	     idx, il->cmd_queue);
 
 	/* Increment and update queue's write idx. */
+	txq->need_update = 1;
 	q->write_ptr = il_queue_inc_wrap(q->write_ptr, q->n_bd);
 	il_txq_update_wptr(il, txq);
 
 	spin_unlock_irqrestore(&il->hcmd_lock, flags);
-	return out_meta;
+
+	return meta;
 }
 
-/**
- * il_hcmd_queue_reclaim - Reclaim TX command queue entries already Tx'd
- *
- * When FW advances 'R' idx, all entries between old and new 'R' idx
- * need to be reclaimed. As result, some free space forms.  If there is
- * enough free space (> low mark), wake the stack that feeds us.
- */
 static void
-il_hcmd_queue_reclaim(struct il_priv *il, int txq_id, int idx, int cmd_idx)
+il_cmd_queue_reclaim(struct il_priv *il, struct il_tx_queue *txq, int idx)
 {
-	struct il_tx_queue *txq = &il->txq[txq_id];
 	struct il_queue *q = &txq->q;
 	int nfreed = 0;
 
 	if (idx >= q->n_bd || il_queue_used(q, idx) == 0) {
-		IL_ERR("Read idx for DMA queue txq id (%d), idx %d, "
-		       "is out of range [0-%d] %d %d.\n", txq_id, idx, q->n_bd,
-		       q->write_ptr, q->read_ptr);
+		IL_ERR("Read idx for command queue txq id (%d), idx %d, "
+		       "is out of range [0-%d] %d %d.\n", il->cmd_queue, idx,
+		       q->n_bd, q->write_ptr, q->read_ptr);
 		return;
 	}
 
@@ -3315,7 +3298,7 @@ il_tx_cmd_complete(struct il_priv *il, struct il_rx_pkt *pkt)
 	int idx = SEQ_TO_IDX(sequence);
 	int cmd_idx;
 	bool huge = !!(pkt->hdr.sequence & SEQ_HUGE_FRAME);
-	struct il_device_cmd *cmd;
+	struct il_device_cmd *dcmd;
 	struct il_cmd_meta *meta;
 	struct il_tx_queue *txq = &il->txq[il->cmd_queue];
 	unsigned long flags;
@@ -3326,7 +3309,7 @@ il_tx_cmd_complete(struct il_priv *il, struct il_rx_pkt *pkt)
 	}
 
 	cmd_idx = il_get_cmd_idx(&txq->q, idx, huge);
-	cmd = txq->cmd[cmd_idx];
+	dcmd = txq->cmd[cmd_idx];
 	meta = &txq->meta[cmd_idx];
 
 	txq->time_stamp = jiffies;
@@ -3335,19 +3318,19 @@ il_tx_cmd_complete(struct il_priv *il, struct il_rx_pkt *pkt)
 			 dma_unmap_len(meta, len), PCI_DMA_BIDIRECTIONAL);
 
 	if (meta->callback)
-		meta->callback(il, cmd, pkt);
+		meta->callback(il, dcmd, pkt);
 
 	spin_lock_irqsave(&il->hcmd_lock, flags);
 
 	if (meta->flags & CMD_COPY_PKT)
-		memcpy(meta->source->pkt_ptr, pkt, sizeof(*pkt));
+		memcpy(meta->hcmd->pkt_ptr, pkt, sizeof(*pkt));
 
-	il_hcmd_queue_reclaim(il, txq_id, idx, cmd_idx);
+	il_cmd_queue_reclaim(il, txq, idx);
 
 	if (!(meta->flags & CMD_ASYNC)) {
 		clear_bit(S_HCMD_ACTIVE, &il->status);
 		D_INFO("Clearing HCMD_ACTIVE for command %s\n",
-		       il_get_cmd_string(cmd->hdr.cmd));
+		       il_get_cmd_string(dcmd->hdr.cmd));
 		wake_up(&il->wait_command_queue);
 	}
 

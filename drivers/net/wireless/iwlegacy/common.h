@@ -101,8 +101,8 @@ struct il_rx_buf {
 struct il_device_cmd;
 
 struct il_cmd_meta {
-	/* only for SYNC commands, iff the reply skb is wanted */
-	struct il_host_cmd *source;
+	/* only for SYNC commands, if the reply pkt is wanted */
+	struct il_host_cmd *hcmd;
 	/*
 	 * only for ASYNC commands
 	 * (which is somewhat stupid -- look at common.c for instance
@@ -117,8 +117,8 @@ struct il_cmd_meta {
 	 * structure is stored at the end of the shared queue memory. */
 	u32 flags;
 
-	 DEFINE_DMA_UNMAP_ADDR(mapping);
-	 DEFINE_DMA_UNMAP_LEN(len);
+	DEFINE_DMA_UNMAP_ADDR(mapping);
+	DEFINE_DMA_UNMAP_LEN(len);
 };
 
 /*
