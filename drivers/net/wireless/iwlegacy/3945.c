@@ -779,6 +779,9 @@ il3945_rx_init(struct il_priv *il, struct il_rx_queue *rxq)
 	/* fake read to flush all prev I/O */
 	il_rd(il, FH39_RSSR_CTRL);
 
+	/* Enable RX queue. */
+	il_wr(il, FH39_RCSR_WPTR(0), rxq->write_actual);
+
 	return 0;
 }
 
@@ -960,15 +963,7 @@ il3945_hw_nic_init(struct il_priv *il)
 	}
 
 	il3945_rx_queue_update(il);
-
 	il3945_rx_init(il, rxq);
-
-	/* Look at using this instead:
-	   rxq->need_update = 1;
-	   il_rx_queue_update_write_ptr(il, rxq);
-	 */
-
-	il_wr(il, FH39_RCSR_WPTR(0), rxq->write & ~7);
 
 	rc = il3945_txq_ctx_reset(il);
 	if (rc)

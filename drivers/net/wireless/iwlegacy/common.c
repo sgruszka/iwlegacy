@@ -2506,12 +2506,12 @@ EXPORT_SYMBOL(il_mac_sta_remove);
  * il_rx_queue_update_write_ptr - Update the write pointer for the RX queue
  */
 void
-il_rx_queue_update_write_ptr(struct il_priv *il, struct il_rx_queue *q)
+il_rx_queue_update_write_ptr(struct il_priv *il, struct il_rx_queue *rxq)
 {
 	const u32 rx_wrt_ptr_reg = il->hw_params.rx_wrt_ptr_reg;
 	u32 reg;
 
-	if (q->need_update == 0)
+	if (rxq->write_actual == (rxq->write & ~0x7))
 		return;
 
 	/* If power-saving is in use, make sure device is awake */
@@ -2525,18 +2525,10 @@ il_rx_queue_update_write_ptr(struct il_priv *il, struct il_rx_queue *q)
 				   CSR_GP_CNTRL_REG_FLAG_MAC_ACCESS_REQ);
 			return;
 		}
-
-		q->write_actual = (q->write & ~0x7);
-		il_wr(il, rx_wrt_ptr_reg, q->write_actual);
-
-		/* Else device is assumed to be awake */
-	} else {
-		/* Device expects a multiple of 8 */
-		q->write_actual = (q->write & ~0x7);
-		il_wr(il, rx_wrt_ptr_reg, q->write_actual);
 	}
 
-	q->need_update = 0;
+	rxq->write_actual = (rxq->write & ~0x7);
+	il_wr(il, rx_wrt_ptr_reg, rxq->write_actual);
 }
 EXPORT_SYMBOL(il_rx_queue_update_write_ptr);
 
@@ -2650,7 +2642,6 @@ il_rx_queue_alloc(struct il_priv *il)
 
 	rxq->read = rxq->write = 0;
 	rxq->write_actual = 0;
-	rxq->need_update = 0;
 	return 0;
 
 err_pages:

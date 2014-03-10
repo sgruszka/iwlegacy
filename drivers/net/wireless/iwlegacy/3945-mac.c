@@ -916,14 +916,7 @@ il3945_rx_queue_update(struct il_priv *il)
 		rxq->write = (rxq->write + 1) & RX_QUEUE_MASK;
 	}
 
-	/* If we've added more space for the firmware to place data, tell it.
-	 x Increment device's write pointer in multiples of 8.
-	 */
-	if (rxq->write_actual != (rxq->write & ~0x7) ||
-	    abs(rxq->write - rxq->read) > 7) {
-		rxq->need_update = 1;
-		il_rx_queue_update_write_ptr(il, rxq);
-	}
+	il_rx_queue_update_write_ptr(il, rxq);
 }
 
 

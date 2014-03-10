@@ -137,6 +137,9 @@ il4965_rx_init(struct il_priv *il, struct il_rx_queue *rxq)
 	/* Set interrupt coalescing timer to default (2048 usecs) */
 	il_write8(il, CSR_INT_COALESCING, IL_HOST_INT_TIMEOUT_DEF);
 
+	/* Enable RX queue. */
+	il_wr(il, FH49_RSCSR_CHNL0_WPTR, rxq->write_actual);
+
 	return 0;
 }
 
@@ -188,9 +191,6 @@ il4965_hw_nic_init(struct il_priv *il)
 	il4965_rx_queue_update(il);
 	il4965_rx_init(il, rxq);
 
-	rxq->need_update = 1;
-	il_rx_queue_update_write_ptr(il, rxq);
-
 	/* Allocate or reset and init all Tx and Command queues */
 	if (!il->txq) {
 		ret = il4965_txq_ctx_alloc(il);
@@ -224,12 +224,7 @@ il4965_rx_queue_update(struct il_priv *il)
 		rxq->write = (rxq->write + 1) & RX_QUEUE_MASK;
 	}
 
-	/* If we've added more space for the firmware to place data, tell it.
-	 * Increment device's write pointer in multiples of 8. */
-	if (rxq->write_actual != (rxq->write & ~0x7)) {
-		rxq->need_update = 1;
-		il_rx_queue_update_write_ptr(il, rxq);
-	}
+	il_rx_queue_update_write_ptr(il, rxq);
 }
 
 int

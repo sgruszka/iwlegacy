@@ -606,7 +606,6 @@ struct il_rx_queue {
 	u32 read;
 	u32 write;
 	u32 write_actual;
-	int need_update;
 	struct il_rb_status *rb_stts;
 	dma_addr_t rb_stts_dma;
 };
