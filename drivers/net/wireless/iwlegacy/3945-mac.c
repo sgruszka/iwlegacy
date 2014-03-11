@@ -1076,9 +1076,6 @@ il3945_irq_tasklet(struct il_priv *il)
 	u32 inta, handled = 0;
 	u32 inta_fh;
 	unsigned long flags;
-#ifdef CONFIG_IWLEGACY_DEBUG
-	u32 inta_mask;
-#endif
 
 	spin_lock_irqsave(&il->lock, flags);
 
@@ -1094,14 +1091,8 @@ il3945_irq_tasklet(struct il_priv *il)
 	inta_fh = _il_rd(il, CSR_FH_INT_STATUS);
 	_il_wr(il, CSR_FH_INT_STATUS, inta_fh);
 
-#ifdef CONFIG_IWLEGACY_DEBUG
-	if (il_get_debug_level(il) & IL_DL_ISR) {
-		/* just for debug */
-		inta_mask = _il_rd(il, CSR_INT_MASK);
-		D_ISR("inta 0x%08x, enabled 0x%08x, fh 0x%08x\n", inta,
-		      inta_mask, inta_fh);
-	}
-#endif
+	D_ISR("Start: inta 0x%08x, enabled 0x%08x, fh 0x%08x\n",
+	      inta, _il_rd(il, CSR_INT_MASK), inta_fh);
 
 	spin_unlock_irqrestore(&il->lock, flags);
 
@@ -1116,7 +1107,7 @@ il3945_irq_tasklet(struct il_priv *il)
 
 	/* Now service all interrupt bits discovered above. */
 	if (inta & CSR_INT_BIT_HW_ERR) {
-		IL_ERR("Hardware error detected.  Restarting.\n");
+		IL_ERR("Hardware error detected.\n");
 
 		/* Tell the device to stop sending interrupts */
 		il_disable_interrupts(il);
@@ -1128,29 +1119,25 @@ il3945_irq_tasklet(struct il_priv *il)
 
 		return;
 	}
-#ifdef CONFIG_IWLEGACY_DEBUG
-	if (il_get_debug_level(il) & (IL_DL_ISR)) {
-		/* NIC fires this, but we don't use it, redundant with WAKEUP */
-		if (inta & CSR_INT_BIT_SCD) {
-			D_ISR("Scheduler finished to transmit "
-			      "the frame/frames.\n");
-			il->isr_stats.sch++;
-		}
 
-		/* Alive notification via Rx interrupt will do the real work */
-		if (inta & CSR_INT_BIT_ALIVE) {
-			D_ISR("Alive interrupt\n");
-			il->isr_stats.alive++;
-		}
+	/* NIC fires this, but we don't use it, redundant with WAKEUP. */
+	if (inta & CSR_INT_BIT_SCD) {
+		D_ISR("Scheduler finished to transmit the frame/frames.\n");
+		il->isr_stats.sch++;
 	}
-#endif
-	/* Safely ignore these bits for debug checks below */
+
+	/* Alive notification via Rx interrupt will do the real work. */
+	if (inta & CSR_INT_BIT_ALIVE) {
+		D_ISR("Alive interrupt\n");
+		il->isr_stats.alive++;
+	}
+
+	/* Safely ignore these bits for debug checks below. */
 	inta &= ~(CSR_INT_BIT_SCD | CSR_INT_BIT_ALIVE);
 
 	/* Error detected by uCode */
 	if (inta & CSR_INT_BIT_SW_ERR) {
-		IL_ERR("Microcode SW error detected. " "Restarting 0x%X.\n",
-		       inta);
+		IL_ERR("Microcode SW error detected 0x%x.\n", inta);
 		il->isr_stats.sw++;
 		il_irq_handle_error(il);
 		handled |= CSR_INT_BIT_SW_ERR;
@@ -1208,15 +1195,9 @@ il3945_irq_tasklet(struct il_priv *il)
 	if (test_bit(S_INT_ENABLED, &il->status))
 		il_enable_interrupts(il);
 
-#ifdef CONFIG_IWLEGACY_DEBUG
-	if (il_get_debug_level(il) & (IL_DL_ISR)) {
-		inta = _il_rd(il, CSR_INT);
-		inta_mask = _il_rd(il, CSR_INT_MASK);
-		inta_fh = _il_rd(il, CSR_FH_INT_STATUS);
-		D_ISR("End inta 0x%08x, enabled 0x%08x, fh 0x%08x, "
-		      "flags 0x%08lx\n", inta, inta_mask, inta_fh, flags);
-	}
-#endif
+	D_ISR("End: inta 0x%08x, enabled 0x%08x, fh 0x%08x, flags 0x%08lx\n",
+	      _il_rd(il, CSR_INT), _il_rd(il, CSR_INT_MASK),
+	      _il_rd(il, CSR_FH_INT_STATUS), flags);
 }
 
 static int
