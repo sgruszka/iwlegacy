@@ -216,7 +216,7 @@ il4965_rx_queue_update(struct il_priv *il)
 	struct il_rx_buf *rxb;
 	u32 end;
 
-	end = (rxq->read - 2) & RX_QUEUE_MASK;
+	end = (rxq->read - 8) & RX_QUEUE_MASK;
 	while (rxq->write != end) {
 		rxb = &rxq->queue[rxq->write];
 		rxq->bd[rxq->write] = cpu_to_le32((u32)(rxb->page_dma >> 8));
@@ -3984,7 +3984,6 @@ il4965_rx_handle(struct il_priv *il)
 	struct il_rx_queue *rxq = &il->rxq;
 	__le32 rb_num;
 	u32 r, i;
-	int count = 8;
 
 	/* uCode's read idx (stored in shared DRAM) indicates the last Rx buffer
 	 * that the driver may process (last buffer filled by ucode).
@@ -4035,17 +4034,13 @@ il4965_rx_handle(struct il_priv *il)
 					       PCI_DMA_FROMDEVICE);
 		i = (i + 1) & RX_QUEUE_MASK;
 
-		count++;
-		if (count >= 8) {
+		if ((i & 0x7) == 0) {
 			rxq->read = i;
 			il4965_rx_queue_update(il);
-			count = 0;
 		}
 	}
 
 	rxq->read = i;
-	if (count != 0)
-		il4965_rx_queue_update(il);
 }
 
 static void
