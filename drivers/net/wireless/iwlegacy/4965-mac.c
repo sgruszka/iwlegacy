@@ -3982,12 +3982,15 @@ il4965_rx_handle(struct il_priv *il)
 	struct il_rx_buf *rxb;
 	struct il_rx_pkt *pkt;
 	struct il_rx_queue *rxq = &il->rxq;
+	__le32 rb_num;
 	u32 r, i;
 	int count = 8;
 
-	/* uCode's read idx (stored in shared DRAM) indicates the last Rx
-	 * buffer that the driver may process (last buffer filled by ucode). */
-	r = le16_to_cpu(rxq->rb_stts->closed_rb_num) & RX_QUEUE_MASK;
+	/* uCode's read idx (stored in shared DRAM) indicates the last Rx buffer
+	 * that the driver may process (last buffer filled by ucode).
+	 */
+	rb_num = ACCESS_ONCE(rxq->rb_stts->closed_rb_num);
+	r = le16_to_cpu(rb_num) & RX_QUEUE_MASK;
 	i = rxq->read;
 
 	/* Rx interrupt, but nothing sent from uCode */
