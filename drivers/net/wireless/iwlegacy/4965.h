@@ -82,7 +82,6 @@ int il4965_tx_agg_start(struct il_priv *il, struct ieee80211_vif *vif,
 int il4965_tx_agg_stop(struct il_priv *il, struct ieee80211_vif *vif,
 		       struct ieee80211_sta *sta, u16 tid);
 int il4965_txq_check_empty(struct il_priv *il, int sta_id, u8 tid, int txq_id);
-int il4965_tx_queue_reclaim(struct il_priv *il, int txq_id, int idx);
 void il4965_hw_txq_ctx_free(struct il_priv *il);
 int il4965_txq_ctx_alloc(struct il_priv *il);
 void il4965_txq_ctx_reset(struct il_priv *il);

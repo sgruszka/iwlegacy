@@ -2217,19 +2217,9 @@ il4965_non_agg_tx_status(struct il_priv *il, const u8 *addr1)
 	rcu_read_unlock();
 }
 
-static void
-il4965_tx_status(struct il_priv *il, struct sk_buff *skb, bool is_agg)
-{
-	struct ieee80211_hdr *hdr = (struct ieee80211_hdr *)skb->data;
-
-	if (!is_agg)
-		il4965_non_agg_tx_status(il, hdr->addr1);
-
-	ieee80211_tx_status_irqsafe(il->hw, skb);
-}
-
-int
-il4965_tx_queue_reclaim(struct il_priv *il, int txq_id, int idx)
+static int
+il4965_tx_queue_reclaim(struct il_priv *il, int txq_id, int idx,
+			struct sk_buff_head *reclaim_skbs)
 {
 	struct il_tx_queue *txq = &il->txq[txq_id];
 	struct il_queue *q = &txq->q;
@@ -2248,6 +2238,7 @@ il4965_tx_queue_reclaim(struct il_priv *il, int txq_id, int idx)
 	     q->read_ptr = il_queue_inc_wrap(q->read_ptr, q->n_bd)) {
 
 		skb = txq->skbs[txq->q.read_ptr];
+		txq->skbs[txq->q.read_ptr] = NULL;
 
 		if (WARN_ON_ONCE(skb == NULL))
 			continue;
@@ -2256,11 +2247,13 @@ il4965_tx_queue_reclaim(struct il_priv *il, int txq_id, int idx)
 		if (ieee80211_is_data_qos(hdr->frame_control))
 			nfreed++;
 
-		il4965_tx_status(il, skb, txq_id >= IL4965_FIRST_AMPDU_QUEUE);
+		if (txq_id < IL4965_FIRST_AMPDU_QUEUE)
+			il4965_non_agg_tx_status(il, hdr->addr1);
 
-		txq->skbs[txq->q.read_ptr] = NULL;
+		__skb_queue_tail(reclaim_skbs, skb);
 		il->ops->txq_free_tfd(il, txq);
 	}
+
 	return nfreed;
 }
 
@@ -2543,10 +2536,9 @@ il4965_hdl_tx(struct il_priv *il, struct il_rx_pkt *pkt)
 	struct ieee80211_tx_info *info;
 	struct il4965_tx_resp *tx_resp = (void *)&pkt->u.raw[0];
 	u32 status = le32_to_cpu(tx_resp->u.status);
-	int uninitialized_var(tid);
-	int sta_id;
-	int freed;
+	int sta_id, tid, freed;
 	u8 *qc = NULL;
+	struct sk_buff_head freed_skbs;
 
 	if (idx >= txq->q.n_bd || il_queue_used(&txq->q, idx) == 0) {
 		IL_ERR("Read idx for DMA queue txq_id (%d) idx %d "
@@ -2562,10 +2554,8 @@ il4965_hdl_tx(struct il_priv *il, struct il_rx_pkt *pkt)
 	memset(&info->status, 0, sizeof(info->status));
 
 	hdr = (struct ieee80211_hdr *) skb->data;
-	if (ieee80211_is_data_qos(hdr->frame_control)) {
+	if (ieee80211_is_data_qos(hdr->frame_control))
 		qc = ieee80211_get_qos_ctl(hdr);
-		tid = qc[0] & 0xf;
-	}
 
 	sta_id = il4965_get_ra_sta_id(il, hdr);
 	if (txq->sched_retry && unlikely(sta_id == IL_INVALID_STATION)) {
@@ -2586,12 +2576,18 @@ il4965_hdl_tx(struct il_priv *il, struct il_rx_pkt *pkt)
 		D_INFO("Stopped queues - RX waiting on passive channel\n");
 	}
 
+	__skb_queue_head_init(&freed_skbs);
+
 	spin_lock(&il->sta_lock);
 
 	if (txq->sched_retry) {
 		const u32 scd_ssn = il4965_get_scd_ssn(tx_resp);
 		struct il_ht_agg *agg = NULL;
-		WARN_ON(!qc);
+
+		if (WARN_ON(!qc))
+			tid = 0;
+		else
+			tid = qc[0] & 0xf;
 
 		agg = &il->stations[sta_id].tid[tid].agg;
 
@@ -2606,7 +2602,8 @@ il4965_hdl_tx(struct il_priv *il, struct il_rx_pkt *pkt)
 			idx = il_queue_dec_wrap(scd_ssn & 0xff, txq->q.n_bd);
 			D_TX_REPLY("Retry scheduler reclaim scd_ssn "
 				   "%d idx %d\n", scd_ssn, idx);
-			freed = il4965_tx_queue_reclaim(il, txq_id, idx);
+			freed = il4965_tx_queue_reclaim(il, txq_id, idx,
+							&freed_skbs);
 			if (qc)
 				il4965_free_tfds_in_queue(il, sta_id, tid,
 							  freed);
@@ -2629,22 +2626,33 @@ il4965_hdl_tx(struct il_priv *il, struct il_rx_pkt *pkt)
 			   le32_to_cpu(tx_resp->rate_n_flags),
 			   tx_resp->failure_frame);
 
-		freed = il4965_tx_queue_reclaim(il, txq_id, idx);
-		if (qc && likely(sta_id != IL_INVALID_STATION))
+		freed = il4965_tx_queue_reclaim(il, txq_id, idx, &freed_skbs);
+
+		if (qc && likely(sta_id != IL_INVALID_STATION)) {
+			tid = qc[0] & 0xf;
 			il4965_free_tfds_in_queue(il, sta_id, tid, freed);
-		else if (sta_id == IL_INVALID_STATION)
+		} else if (sta_id == IL_INVALID_STATION) {
 			D_TX_REPLY("Station not known\n");
+		}
 
 		if (il->mac80211_registered &&
 		    il_queue_space(&txq->q) > txq->q.low_mark)
 			il_wake_queue(il, txq);
 	}
-	if (qc && likely(sta_id != IL_INVALID_STATION))
+
+	if (qc && likely(sta_id != IL_INVALID_STATION)) {
+		tid = qc[0] & 0xf;
 		il4965_txq_check_empty(il, sta_id, tid, txq_id);
+	}
 
 	il4965_check_abort_status(il, tx_resp->frame_count, status);
 
 	spin_unlock(&il->sta_lock);
+
+	while (!skb_queue_empty(&freed_skbs)) {
+		skb = __skb_dequeue(&freed_skbs);
+		ieee80211_tx_status(il->hw, skb);
+	}
 }
 
 /**
@@ -2681,11 +2689,11 @@ static void
 il4965_hdl_compressed_ba(struct il_priv *il, struct il_rx_pkt *pkt)
 {
 	struct il_compressed_ba_resp *ba_resp = &pkt->u.compressed_ba;
-	struct il_tx_queue *txq = NULL;
+	struct il_tx_queue *txq;
 	struct il_ht_agg *agg;
-	int idx;
-	int sta_id;
-	int tid;
+	struct sk_buff_head freed_skbs;
+	struct sk_buff *skb;
+	int idx, sta_id, tid, freed;
 
 	/* "flow" corresponds to Tx queue */
 	u16 scd_flow = le16_to_cpu(ba_resp->scd_flow);
@@ -2718,6 +2726,8 @@ il4965_hdl_compressed_ba(struct il_priv *il, struct il_rx_pkt *pkt)
 	/* Find idx just before block-ack win */
 	idx = il_queue_dec_wrap(ba_resp_scd_ssn & 0xff, txq->q.n_bd);
 
+	__skb_queue_head_init(&freed_skbs);
+
 	spin_lock(&il->sta_lock);
 
 	D_TX_REPLY("N_COMPRESSED_BA [%d] Received from %pM, " "sta_id = %d\n",
@@ -2738,7 +2748,7 @@ il4965_hdl_compressed_ba(struct il_priv *il, struct il_rx_pkt *pkt)
 	 * transmitted ... if not, it's too late anyway). */
 	if (txq->q.read_ptr != (ba_resp_scd_ssn & 0xff)) {
 		/* calculate mac80211 ampdu sw queue to wake */
-		int freed = il4965_tx_queue_reclaim(il, scd_flow, idx);
+		freed = il4965_tx_queue_reclaim(il, scd_flow, idx, &freed_skbs);
 		il4965_free_tfds_in_queue(il, sta_id, tid, freed);
 
 		if (il_queue_space(&txq->q) > txq->q.low_mark &&
@@ -2750,6 +2760,11 @@ il4965_hdl_compressed_ba(struct il_priv *il, struct il_rx_pkt *pkt)
 	}
 
 	spin_unlock(&il->sta_lock);
+
+	while (!skb_queue_empty(&freed_skbs)) {
+		skb = __skb_dequeue(&freed_skbs);
+		ieee80211_tx_status(il->hw, skb);
+	}
 }
 
 #ifdef CONFIG_IWLEGACY_DEBUG
