@@ -133,7 +133,6 @@ static int
 il3945_set_ccmp_dynamic_key_info(struct il_priv *il,
 				 struct ieee80211_key_conf *keyconf, u8 sta_id)
 {
-	unsigned long flags;
 	__le16 key_flags = 0;
 	int ret;
 
@@ -147,7 +146,7 @@ il3945_set_ccmp_dynamic_key_info(struct il_priv *il,
 	keyconf->hw_key_idx = keyconf->keyidx;
 	key_flags &= ~STA_KEY_FLG_INVALID;
 
-	spin_lock_irqsave(&il->sta_lock, flags);
+	spin_lock_bh(&il->sta_lock);
 	il->stations[sta_id].keyinfo.cipher = keyconf->cipher;
 	il->stations[sta_id].keyinfo.keylen = keyconf->keylen;
 	memcpy(il->stations[sta_id].keyinfo.key, keyconf->key, keyconf->keylen);
@@ -172,7 +171,7 @@ il3945_set_ccmp_dynamic_key_info(struct il_priv *il,
 
 	ret = il_send_add_sta(il, &il->stations[sta_id].sta, CMD_ASYNC);
 
-	spin_unlock_irqrestore(&il->sta_lock, flags);
+	spin_unlock_bh(&il->sta_lock);
 
 	return ret;
 }
@@ -194,10 +193,9 @@ il3945_set_wep_dynamic_key_info(struct il_priv *il,
 static int
 il3945_clear_sta_key_info(struct il_priv *il, u8 sta_id)
 {
-	unsigned long flags;
 	struct il_addsta_cmd sta_cmd;
 
-	spin_lock_irqsave(&il->sta_lock, flags);
+	spin_lock_bh(&il->sta_lock);
 	memset(&il->stations[sta_id].keyinfo, 0, sizeof(struct il_hw_key));
 	memset(&il->stations[sta_id].sta.key, 0, sizeof(struct il4965_keyinfo));
 	il->stations[sta_id].sta.key.key_flags = STA_KEY_FLG_NO_ENC;
@@ -205,7 +203,7 @@ il3945_clear_sta_key_info(struct il_priv *il, u8 sta_id)
 	il->stations[sta_id].sta.mode = STA_CONTROL_MODIFY_MSK;
 	memcpy(&sta_cmd, &il->stations[sta_id].sta,
 	       sizeof(struct il_addsta_cmd));
-	spin_unlock_irqrestore(&il->sta_lock, flags);
+	spin_unlock_bh(&il->sta_lock);
 
 	D_INFO("hwcrypto: clear ucode station key info\n");
 	return il_send_add_sta(il, &sta_cmd, CMD_SYNC);
@@ -482,9 +480,9 @@ il3945_tx_skb(struct il_priv *il,
 	u8 tid = 0;
 	__le16 fc;
 	u8 wait_write_ptr = 0;
-	unsigned long flags;
 
-	spin_lock_irqsave(&il->lock, flags);
+	spin_lock(&il->lock);
+
 	if (il_is_rfkill(il)) {
 		D_DROP("Dropping - RF KILL\n");
 		goto drop_unlock;
@@ -510,7 +508,7 @@ il3945_tx_skb(struct il_priv *il,
 		D_TX("Sending REASSOC frame\n");
 #endif
 
-	spin_unlock_irqrestore(&il->lock, flags);
+	spin_unlock(&il->lock);
 
 	hdr_len = ieee80211_hdrlen(fc);
 
@@ -537,7 +535,7 @@ il3945_tx_skb(struct il_priv *il,
 	if ((il_queue_space(q) < q->high_mark))
 		goto drop;
 
-	spin_lock_irqsave(&il->lock, flags);
+	spin_lock(&il->lock);
 
 	idx = il_get_cmd_idx(q, q->write_ptr, 0);
 
@@ -638,14 +636,14 @@ il3945_tx_skb(struct il_priv *il,
 	/* Tell device the write idx *just past* this latest filled TFD */
 	q->write_ptr = il_queue_inc_wrap(q->write_ptr, q->n_bd);
 	il_txq_update_wptr(il, txq);
-	spin_unlock_irqrestore(&il->lock, flags);
+	spin_unlock(&il->lock);
 
 	if (il_queue_space(q) < q->high_mark && il->mac80211_registered) {
 		if (wait_write_ptr) {
-			spin_lock_irqsave(&il->lock, flags);
+			spin_lock(&il->lock);
 			txq->need_update = 1;
 			il_txq_update_wptr(il, txq);
-			spin_unlock_irqrestore(&il->lock, flags);
+			spin_unlock(&il->lock);
 		}
 
 		il_stop_queue(il, txq);
@@ -654,7 +652,7 @@ il3945_tx_skb(struct il_priv *il,
 	return 0;
 
 drop_unlock:
-	spin_unlock_irqrestore(&il->lock, flags);
+	spin_unlock(&il->lock);
 drop:
 	return -1;
 }
@@ -997,15 +995,6 @@ il3945_rx_handle(struct il_priv *il)
 		il3945_rx_queue_update(il);
 }
 
-/* call this function to flush any scheduled tasklet */
-static inline void
-il3945_synchronize_irq(struct il_priv *il)
-{
-	/* wait to make sure we flush pending tasklet */
-	synchronize_irq(il->pci_dev->irq);
-	tasklet_kill(&il->irq_tasklet);
-}
-
 static const char *
 il3945_desc_lookup(int i)
 {
@@ -1075,9 +1064,6 @@ il3945_irq_tasklet(struct il_priv *il)
 {
 	u32 inta, handled = 0;
 	u32 inta_fh;
-	unsigned long flags;
-
-	spin_lock_irqsave(&il->lock, flags);
 
 	/* Ack/clear/reset pending uCode interrupts.
 	 * Note:  Some bits in CSR_INT are "OR" of bits in CSR_FH_INT_STATUS,
@@ -1091,10 +1077,8 @@ il3945_irq_tasklet(struct il_priv *il)
 	inta_fh = _il_rd(il, CSR_FH_INT_STATUS);
 	_il_wr(il, CSR_FH_INT_STATUS, inta_fh);
 
-	D_ISR("Start: inta 0x%08x, enabled 0x%08x, fh 0x%08x\n",
+	D_ISR("Start: inta 0x%08x mask 0x%08x fh 0x%08x\n",
 	      inta, _il_rd(il, CSR_INT_MASK), inta_fh);
-
-	spin_unlock_irqrestore(&il->lock, flags);
 
 	/* Since CSR_INT and CSR_FH_INT_STATUS reads and clears are not
 	 * atomic, make sure that inta covers all the interrupts that
@@ -1128,7 +1112,7 @@ il3945_irq_tasklet(struct il_priv *il)
 
 	/* Alive notification via Rx interrupt will do the real work. */
 	if (inta & CSR_INT_BIT_ALIVE) {
-		D_ISR("Alive interrupt\n");
+		D_ISR("Alive interrupt.\n");
 		il->isr_stats.alive++;
 	}
 
@@ -1145,17 +1129,17 @@ il3945_irq_tasklet(struct il_priv *il)
 
 	/* uCode wakes up after power-down sleep */
 	if (inta & CSR_INT_BIT_WAKEUP) {
-		D_ISR("Wakeup interrupt\n");
+		D_ISR("Wakeup interrupt.\n");
 
 		il_rxq_update_wptr(il, &il->rxq);
 
-		spin_lock_irqsave(&il->lock, flags);
+		spin_lock_bh(&il->lock);
 		il_txq_update_wptr(il, &il->txq[0]);
 		il_txq_update_wptr(il, &il->txq[1]);
 		il_txq_update_wptr(il, &il->txq[2]);
 		il_txq_update_wptr(il, &il->txq[3]);
 		il_txq_update_wptr(il, &il->txq[4]);
-		spin_unlock_irqrestore(&il->lock, flags);
+		spin_unlock_bh(&il->lock);
 
 		il->isr_stats.wakeup++;
 		handled |= CSR_INT_BIT_WAKEUP;
@@ -1195,9 +1179,9 @@ il3945_irq_tasklet(struct il_priv *il)
 	if (test_bit(S_INT_ENABLED, &il->status))
 		il_enable_interrupts(il);
 
-	D_ISR("End: inta 0x%08x, enabled 0x%08x, fh 0x%08x, flags 0x%08lx\n",
+	D_ISR("End: inta 0x%08x mask 0x%08x fh 0x%08x.\n",
 	      _il_rd(il, CSR_INT), _il_rd(il, CSR_INT_MASK),
-	      _il_rd(il, CSR_FH_INT_STATUS), flags);
+	      _il_rd(il, CSR_FH_INT_STATUS));
 }
 
 static int
@@ -1901,7 +1885,6 @@ static void il3945_cancel_deferred_work(struct il_priv *il);
 static void
 __il3945_down(struct il_priv *il)
 {
-	unsigned long flags;
 	int exit_pending;
 
 	D_INFO(DRV_NAME " is going down\n");
@@ -1931,10 +1914,8 @@ __il3945_down(struct il_priv *il)
 	_il_wr(il, CSR_RESET, CSR_RESET_REG_FLAG_NEVO_RESET);
 
 	/* tell the device to stop sending interrupts */
-	spin_lock_irqsave(&il->lock, flags);
 	il_disable_interrupts(il);
-	spin_unlock_irqrestore(&il->lock, flags);
-	il3945_synchronize_irq(il);
+	il_synchronize_irq(il);
 
 	if (il->mac80211_registered)
 		ieee80211_stop_queues(il->hw);
@@ -2002,21 +1983,20 @@ il3945_down(struct il_priv *il)
 static int
 il3945_alloc_bcast_station(struct il_priv *il)
 {
-	unsigned long flags;
 	u8 sta_id;
 
-	spin_lock_irqsave(&il->sta_lock, flags);
+	spin_lock_bh(&il->sta_lock);
 	sta_id = il_prep_station(il, il_bcast_addr, false, NULL);
 	if (sta_id == IL_INVALID_STATION) {
 		IL_ERR("Unable to prepare broadcast station\n");
-		spin_unlock_irqrestore(&il->sta_lock, flags);
+		spin_unlock_bh(&il->sta_lock);
 
 		return -EINVAL;
 	}
 
 	il->stations[sta_id].used |= IL_STA_DRIVER_ACTIVE;
 	il->stations[sta_id].used |= IL_STA_BCAST;
-	spin_unlock_irqrestore(&il->sta_lock, flags);
+	spin_unlock_bh(&il->sta_lock);
 
 	return 0;
 }
@@ -2886,16 +2866,15 @@ il3945_show_measurement(struct device *d, struct device_attribute *attr,
 	struct il_spectrum_notification measure_report;
 	u32 size = sizeof(measure_report), len = 0, ofs = 0;
 	u8 *data = (u8 *) &measure_report;
-	unsigned long flags;
 
-	spin_lock_irqsave(&il->lock, flags);
+	spin_lock_bh(&il->lock);
 	if (!(il->measurement_status & MEASUREMENT_READY)) {
-		spin_unlock_irqrestore(&il->lock, flags);
+		spin_unlock_bh(&il->lock);
 		return 0;
 	}
 	memcpy(&measure_report, &il->measure_report, size);
 	il->measurement_status = 0;
-	spin_unlock_irqrestore(&il->lock, flags);
+	spin_unlock_bh(&il->lock);
 
 	while (size && PAGE_SIZE - len) {
 		hex_dump_to_buffer(data + ofs, size, 16, 1, buf + len,
@@ -3249,7 +3228,6 @@ il3945_pci_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	struct ieee80211_hw *hw;
 	struct il_cfg *cfg = (struct il_cfg *)(ent->driver_data);
 	struct il3945_eeprom *eeprom;
-	unsigned long flags;
 
 	/***********************
 	 * 1. Allocating HW data
@@ -3382,9 +3360,7 @@ il3945_pci_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	 * 7. Setup Services
 	 * ********************/
 
-	spin_lock_irqsave(&il->lock, flags);
 	il_disable_interrupts(il);
-	spin_unlock_irqrestore(&il->lock, flags);
 
 	pci_enable_msi(il->pci_dev);
 
@@ -3455,7 +3431,6 @@ static void
 il3945_pci_remove(struct pci_dev *pdev)
 {
 	struct il_priv *il = pci_get_drvdata(pdev);
-	unsigned long flags;
 
 	if (!il)
 		return;
@@ -3487,11 +3462,8 @@ il3945_pci_remove(struct pci_dev *pdev)
 	/* make sure we flush any pending irq or
 	 * tasklet for the driver
 	 */
-	spin_lock_irqsave(&il->lock, flags);
 	il_disable_interrupts(il);
-	spin_unlock_irqrestore(&il->lock, flags);
-
-	il3945_synchronize_irq(il);
+	il_synchronize_irq(il);
 
 	sysfs_remove_group(&pdev->dev.kobj, &il3945_attribute_group);
 

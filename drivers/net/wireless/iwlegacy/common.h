@@ -1173,6 +1173,7 @@ struct il_priv {
 
 	/* spinlock */
 	spinlock_t lock;	/* protect general shared data */
+	spinlock_t irq_lock;	/* synchronize interrupt operations */
 	spinlock_t hcmd_lock;	/* protect hcmd */
 	spinlock_t reg_lock;	/* protect hw register access */
 	struct mutex mutex;
@@ -2139,13 +2140,11 @@ int il_send_lq_cmd(struct il_priv *il, struct il_link_quality_cmd *lq,
 static inline void
 il_clear_driver_stations(struct il_priv *il)
 {
-	unsigned long flags;
-
-	spin_lock_irqsave(&il->sta_lock, flags);
+	spin_lock_bh(&il->sta_lock);
 	memset(il->stations, 0, sizeof(il->stations));
 	il->num_stations = 0;
 	il->ucode_key_table = 0;
-	spin_unlock_irqrestore(&il->sta_lock, flags);
+	spin_unlock_bh(&il->sta_lock);
 }
 
 static inline int
@@ -2323,6 +2322,8 @@ il_stop_queues_by_reason(struct il_priv *il, int reason)
 static inline void
 il_disable_interrupts(struct il_priv *il)
 {
+	spin_lock_irq(&il->irq_lock);
+
 	clear_bit(S_INT_ENABLED, &il->status);
 
 	/* disable interrupts from uCode/NIC to host */
@@ -2332,6 +2333,8 @@ il_disable_interrupts(struct il_priv *il)
 	 * from uCode or flow handler (Rx/Tx DMA) */
 	_il_wr(il, CSR_INT, 0xffffffff);
 	_il_wr(il, CSR_FH_INT_STATUS, 0xffffffff);
+
+	spin_unlock_irq(&il->irq_lock);
 }
 
 static inline void
@@ -2343,8 +2346,19 @@ il_enable_rfkill_int(struct il_priv *il)
 static inline void
 il_enable_interrupts(struct il_priv *il)
 {
+	spin_lock_irq(&il->irq_lock);
+
 	set_bit(S_INT_ENABLED, &il->status);
 	_il_wr(il, CSR_INT_MASK, il->inta_mask);
+
+	spin_unlock_irq(&il->irq_lock);
+}
+
+static inline void
+il_synchronize_irq(struct il_priv *il)
+{
+	synchronize_irq(il->pci_dev->irq);
+	tasklet_kill(&il->irq_tasklet);
 }
 
 /**

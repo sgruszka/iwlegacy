@@ -493,7 +493,6 @@ il4965_sensitivity_calibration(struct il_priv *il, void *resp)
 	struct il_sensitivity_data *data = NULL;
 	struct stats_rx_non_phy *rx_info;
 	struct stats_rx_phy *ofdm, *cck;
-	unsigned long flags;
 	struct stats_general_data statis;
 
 	if (il->disable_sens_cal)
@@ -506,7 +505,7 @@ il4965_sensitivity_calibration(struct il_priv *il, void *resp)
 		return;
 	}
 
-	spin_lock_irqsave(&il->lock, flags);
+	spin_lock_bh(&il->lock);
 
 	rx_info = &(((struct il_notif_stats *)resp)->rx.general);
 	ofdm = &(((struct il_notif_stats *)resp)->rx.ofdm);
@@ -514,7 +513,7 @@ il4965_sensitivity_calibration(struct il_priv *il, void *resp)
 
 	if (rx_info->interference_data_flag != INTERFERENCE_DATA_AVAILABLE) {
 		D_CALIB("<< invalid data.\n");
-		spin_unlock_irqrestore(&il->lock, flags);
+		spin_unlock_bh(&il->lock);
 		return;
 	}
 
@@ -535,7 +534,7 @@ il4965_sensitivity_calibration(struct il_priv *il, void *resp)
 	statis.beacon_energy_b = le32_to_cpu(rx_info->beacon_energy_b);
 	statis.beacon_energy_c = le32_to_cpu(rx_info->beacon_energy_c);
 
-	spin_unlock_irqrestore(&il->lock, flags);
+	spin_unlock_bh(&il->lock);
 
 	D_CALIB("rx_enable_time = %u usecs\n", rx_enable_time);
 
@@ -791,7 +790,6 @@ il4965_chain_noise_calibration(struct il_priv *il, void *stat_resp)
 	u16 stat_chnum = INITIALIZATION_VALUE;
 	u8 rxon_band24;
 	u8 stat_band24;
-	unsigned long flags;
 	struct stats_rx_non_phy *rx_info;
 
 	if (il->disable_chain_noise_cal)
@@ -809,13 +807,13 @@ il4965_chain_noise_calibration(struct il_priv *il, void *stat_resp)
 		return;
 	}
 
-	spin_lock_irqsave(&il->lock, flags);
+	spin_lock_bh(&il->lock);
 
 	rx_info = &(((struct il_notif_stats *)stat_resp)->rx.general);
 
 	if (rx_info->interference_data_flag != INTERFERENCE_DATA_AVAILABLE) {
 		D_CALIB(" << Interference data unavailable\n");
-		spin_unlock_irqrestore(&il->lock, flags);
+		spin_unlock_bh(&il->lock);
 		return;
 	}
 
@@ -833,7 +831,7 @@ il4965_chain_noise_calibration(struct il_priv *il, void *stat_resp)
 	if (rxon_chnum != stat_chnum || rxon_band24 != stat_band24) {
 		D_CALIB("Stats not from chan=%d, band24=%d\n", rxon_chnum,
 			rxon_band24);
-		spin_unlock_irqrestore(&il->lock, flags);
+		spin_unlock_bh(&il->lock);
 		return;
 	}
 
@@ -852,7 +850,7 @@ il4965_chain_noise_calibration(struct il_priv *il, void *stat_resp)
 	chain_sig_b = le32_to_cpu(rx_info->beacon_rssi_b) & IN_BAND_FILTER;
 	chain_sig_c = le32_to_cpu(rx_info->beacon_rssi_c) & IN_BAND_FILTER;
 
-	spin_unlock_irqrestore(&il->lock, flags);
+	spin_unlock_bh(&il->lock);
 
 	data->beacon_count++;
 

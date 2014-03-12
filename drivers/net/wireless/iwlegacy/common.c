@@ -1748,7 +1748,6 @@ il_process_add_sta_resp(struct il_priv *il, struct il_addsta_cmd *addsta,
 			struct il_rx_pkt *pkt, bool sync)
 {
 	u8 sta_id = addsta->sta.sta_id;
-	unsigned long flags;
 	int ret = -EIO;
 
 	if (pkt->hdr.flags & IL_CMD_FAILED_MSK) {
@@ -1758,7 +1757,7 @@ il_process_add_sta_resp(struct il_priv *il, struct il_addsta_cmd *addsta,
 
 	D_INFO("Processing response for adding station %u\n", sta_id);
 
-	spin_lock_irqsave(&il->sta_lock, flags);
+	spin_lock_bh(&il->sta_lock);
 
 	switch (pkt->u.add_sta.status) {
 	case ADD_STA_SUCCESS_MSK:
@@ -1798,7 +1797,7 @@ il_process_add_sta_resp(struct il_priv *il, struct il_addsta_cmd *addsta,
 	D_INFO("%s station according to cmd buffer %pM\n",
 	       il->stations[sta_id].sta.mode ==
 	       STA_CONTROL_MODIFY_MSK ? "Modified" : "Added", addsta->sta.addr);
-	spin_unlock_irqrestore(&il->sta_lock, flags);
+	spin_unlock_bh(&il->sta_lock);
 
 	return ret;
 }
@@ -1997,17 +1996,16 @@ int
 il_add_station_common(struct il_priv *il, const u8 *addr, bool is_ap,
 		      struct ieee80211_sta *sta, u8 *sta_id_r)
 {
-	unsigned long flags_spin;
 	int ret = 0;
 	u8 sta_id;
 	struct il_addsta_cmd sta_cmd;
 
 	*sta_id_r = 0;
-	spin_lock_irqsave(&il->sta_lock, flags_spin);
+	spin_lock_bh(&il->sta_lock);
 	sta_id = il_prep_station(il, addr, is_ap, sta);
 	if (sta_id == IL_INVALID_STATION) {
 		IL_ERR("Unable to prepare station %pM for addition\n", addr);
-		spin_unlock_irqrestore(&il->sta_lock, flags_spin);
+		spin_unlock_bh(&il->sta_lock);
 		return -EINVAL;
 	}
 
@@ -2018,7 +2016,7 @@ il_add_station_common(struct il_priv *il, const u8 *addr, bool is_ap,
 	 */
 	if (il->stations[sta_id].used & IL_STA_UCODE_INPROGRESS) {
 		D_INFO("STA %d already in process of being added.\n", sta_id);
-		spin_unlock_irqrestore(&il->sta_lock, flags_spin);
+		spin_unlock_bh(&il->sta_lock);
 		return -EEXIST;
 	}
 
@@ -2026,24 +2024,24 @@ il_add_station_common(struct il_priv *il, const u8 *addr, bool is_ap,
 	    (il->stations[sta_id].used & IL_STA_UCODE_ACTIVE)) {
 		D_ASSOC("STA %d (%pM) already added, not adding again.\n",
 			sta_id, addr);
-		spin_unlock_irqrestore(&il->sta_lock, flags_spin);
+		spin_unlock_bh(&il->sta_lock);
 		return -EEXIST;
 	}
 
 	il->stations[sta_id].used |= IL_STA_UCODE_INPROGRESS;
 	memcpy(&sta_cmd, &il->stations[sta_id].sta,
 	       sizeof(struct il_addsta_cmd));
-	spin_unlock_irqrestore(&il->sta_lock, flags_spin);
+	spin_unlock_bh(&il->sta_lock);
 
 	/* Add station to device's station table */
 	ret = il_send_add_sta(il, &sta_cmd, CMD_SYNC);
 	if (ret) {
-		spin_lock_irqsave(&il->sta_lock, flags_spin);
+		spin_lock_bh(&il->sta_lock);
 		IL_ERR("Adding station %pM failed.\n",
 		       il->stations[sta_id].sta.sta.addr);
 		il->stations[sta_id].used &= ~IL_STA_DRIVER_ACTIVE;
 		il->stations[sta_id].used &= ~IL_STA_UCODE_INPROGRESS;
-		spin_unlock_irqrestore(&il->sta_lock, flags_spin);
+		spin_unlock_bh(&il->sta_lock);
 	}
 	*sta_id_r = sta_id;
 	return ret;
@@ -2076,7 +2074,6 @@ il_send_remove_station(struct il_priv *il, const u8 * addr, int sta_id,
 {
 	struct il_rx_pkt *pkt;
 	int ret;
-	unsigned long flags_spin;
 	struct il_rem_sta_cmd rm_sta_cmd;
 
 	struct il_host_cmd cmd = {
@@ -2108,10 +2105,9 @@ il_send_remove_station(struct il_priv *il, const u8 * addr, int sta_id,
 		switch (pkt->u.rem_sta.status) {
 		case REM_STA_SUCCESS_MSK:
 			if (!temporary) {
-				spin_lock_irqsave(&il->sta_lock, flags_spin);
+				spin_lock_bh(&il->sta_lock);
 				il_sta_ucode_deactivate(il, sta_id);
-				spin_unlock_irqrestore(&il->sta_lock,
-						       flags_spin);
+				spin_unlock_bh(&il->sta_lock);
 			}
 			D_ASSOC("C_REM_STA PASSED\n");
 			break;
@@ -2133,7 +2129,6 @@ out:
 int
 il_remove_station(struct il_priv *il, const u8 sta_id, const u8 * addr)
 {
-	unsigned long flags;
 
 	if (!il_is_ready(il)) {
 		D_INFO("Unable to remove station %pM, device not ready.\n",
@@ -2151,7 +2146,7 @@ il_remove_station(struct il_priv *il, const u8 sta_id, const u8 * addr)
 	if (WARN_ON(sta_id == IL_INVALID_STATION))
 		return -EINVAL;
 
-	spin_lock_irqsave(&il->sta_lock, flags);
+	spin_lock_bh(&il->sta_lock);
 
 	if (!(il->stations[sta_id].used & IL_STA_DRIVER_ACTIVE)) {
 		D_INFO("Removing %pM but non DRIVER active\n", addr);
@@ -2174,11 +2169,11 @@ il_remove_station(struct il_priv *il, const u8 sta_id, const u8 * addr)
 
 	BUG_ON(il->num_stations < 0);
 
-	spin_unlock_irqrestore(&il->sta_lock, flags);
+	spin_unlock_bh(&il->sta_lock);
 
 	return il_send_remove_station(il, addr, sta_id, false);
 out_err:
-	spin_unlock_irqrestore(&il->sta_lock, flags);
+	spin_unlock_bh(&il->sta_lock);
 	return -EINVAL;
 }
 EXPORT_SYMBOL_GPL(il_remove_station);
@@ -2195,12 +2190,11 @@ void
 il_clear_ucode_stations(struct il_priv *il)
 {
 	int i;
-	unsigned long flags_spin;
 	bool cleared = false;
 
 	D_INFO("Clearing ucode stations in driver\n");
 
-	spin_lock_irqsave(&il->sta_lock, flags_spin);
+	spin_lock_bh(&il->sta_lock);
 	for (i = 0; i < il->hw_params.max_stations; i++) {
 		if (il->stations[i].used & IL_STA_UCODE_ACTIVE) {
 			D_INFO("Clearing ucode active for station %d\n", i);
@@ -2208,7 +2202,7 @@ il_clear_ucode_stations(struct il_priv *il)
 			cleared = true;
 		}
 	}
-	spin_unlock_irqrestore(&il->sta_lock, flags_spin);
+	spin_unlock_bh(&il->sta_lock);
 
 	if (!cleared)
 		D_INFO("No active stations found to be cleared\n");
@@ -2228,7 +2222,6 @@ il_restore_stations(struct il_priv *il)
 {
 	struct il_addsta_cmd sta_cmd;
 	struct il_link_quality_cmd lq;
-	unsigned long flags_spin;
 	int i;
 	bool found = false;
 	int ret;
@@ -2240,7 +2233,7 @@ il_restore_stations(struct il_priv *il)
 	}
 
 	D_ASSOC("Restoring all known stations ... start.\n");
-	spin_lock_irqsave(&il->sta_lock, flags_spin);
+	spin_lock_bh(&il->sta_lock);
 	for (i = 0; i < il->hw_params.max_stations; i++) {
 		if ((il->stations[i].used & IL_STA_DRIVER_ACTIVE) &&
 		    !(il->stations[i].used & IL_STA_UCODE_ACTIVE)) {
@@ -2262,17 +2255,16 @@ il_restore_stations(struct il_priv *il)
 				       sizeof(struct il_link_quality_cmd));
 				send_lq = true;
 			}
-			spin_unlock_irqrestore(&il->sta_lock, flags_spin);
+			spin_unlock_bh(&il->sta_lock);
 			ret = il_send_add_sta(il, &sta_cmd, CMD_SYNC);
 			if (ret) {
-				spin_lock_irqsave(&il->sta_lock, flags_spin);
+				spin_lock_bh(&il->sta_lock);
 				IL_ERR("Adding station %pM failed.\n",
 				       il->stations[i].sta.sta.addr);
 				il->stations[i].used &= ~IL_STA_DRIVER_ACTIVE;
 				il->stations[i].used &=
 				    ~IL_STA_UCODE_INPROGRESS;
-				spin_unlock_irqrestore(&il->sta_lock,
-						       flags_spin);
+				spin_unlock_bh(&il->sta_lock);
 			}
 			/*
 			 * Rate scaling has already been initialized, send
@@ -2280,12 +2272,12 @@ il_restore_stations(struct il_priv *il)
 			 */
 			if (send_lq)
 				il_send_lq_cmd(il, &lq, CMD_SYNC, true);
-			spin_lock_irqsave(&il->sta_lock, flags_spin);
+			spin_lock_bh(&il->sta_lock);
 			il->stations[i].used &= ~IL_STA_UCODE_INPROGRESS;
 		}
 	}
 
-	spin_unlock_irqrestore(&il->sta_lock, flags_spin);
+	spin_unlock_bh(&il->sta_lock);
 	if (!found)
 		D_INFO("Restoring all known stations"
 		       " .... no stations to be restored.\n");
@@ -2310,10 +2302,9 @@ EXPORT_SYMBOL(il_get_free_ucode_key_idx);
 void
 il_dealloc_bcast_stations(struct il_priv *il)
 {
-	unsigned long flags;
 	int i;
 
-	spin_lock_irqsave(&il->sta_lock, flags);
+	spin_lock_bh(&il->sta_lock);
 	for (i = 0; i < il->hw_params.max_stations; i++) {
 		if (!(il->stations[i].used & IL_STA_BCAST))
 			continue;
@@ -2324,7 +2315,7 @@ il_dealloc_bcast_stations(struct il_priv *il)
 		kfree(il->stations[i].lq);
 		il->stations[i].lq = NULL;
 	}
-	spin_unlock_irqrestore(&il->sta_lock, flags);
+	spin_unlock_bh(&il->sta_lock);
 }
 EXPORT_SYMBOL_GPL(il_dealloc_bcast_stations);
 
@@ -2391,7 +2382,6 @@ il_send_lq_cmd(struct il_priv *il, struct il_link_quality_cmd *lq,
 	       u8 flags, bool init)
 {
 	int ret = 0;
-	unsigned long flags_spin;
 
 	struct il_host_cmd cmd = {
 		.id = C_TX_LINK_QUALITY_CMD,
@@ -2403,12 +2393,12 @@ il_send_lq_cmd(struct il_priv *il, struct il_link_quality_cmd *lq,
 	if (WARN_ON(lq->sta_id == IL_INVALID_STATION))
 		return -EINVAL;
 
-	spin_lock_irqsave(&il->sta_lock, flags_spin);
+	spin_lock_bh(&il->sta_lock);
 	if (!(il->stations[lq->sta_id].used & IL_STA_DRIVER_ACTIVE)) {
-		spin_unlock_irqrestore(&il->sta_lock, flags_spin);
+		spin_unlock_bh(&il->sta_lock);
 		return -EINVAL;
 	}
-	spin_unlock_irqrestore(&il->sta_lock, flags_spin);
+	spin_unlock_bh(&il->sta_lock);
 
 	il_dump_lq_cmd(il, lq);
 	BUG_ON(init && (cmd.flags & CMD_ASYNC));
@@ -2425,9 +2415,9 @@ il_send_lq_cmd(struct il_priv *il, struct il_link_quality_cmd *lq,
 		D_INFO("init LQ command complete,"
 		       " clearing sta addition status for sta %d\n",
 		       lq->sta_id);
-		spin_lock_irqsave(&il->sta_lock, flags_spin);
+		spin_lock_bh(&il->sta_lock);
 		il->stations[lq->sta_id].used &= ~IL_STA_UCODE_INPROGRESS;
-		spin_unlock_irqrestore(&il->sta_lock, flags_spin);
+		spin_unlock_bh(&il->sta_lock);
 	}
 	return ret;
 }
@@ -3179,7 +3169,6 @@ il_enqueue_hcmd(struct il_priv *il, struct il_host_cmd *hcmd)
 	struct il_cmd_meta *meta;
 	dma_addr_t dev_addr;
 	u16 dev_size;
-	unsigned long flags;
 	u32 idx;
 
 	hcmd->len = il->ops->get_hcmd_size(hcmd->id, hcmd->len);
@@ -3195,10 +3184,10 @@ il_enqueue_hcmd(struct il_priv *il, struct il_host_cmd *hcmd)
 		return ERR_PTR(-EIO);
 	}
 
-	spin_lock_irqsave(&il->hcmd_lock, flags);
+	spin_lock_bh(&il->hcmd_lock);
 
 	if (il_queue_space(q) < ((hcmd->flags & CMD_ASYNC) ? 2 : 1)) {
-		spin_unlock_irqrestore(&il->hcmd_lock, flags);
+		spin_unlock_bh(&il->hcmd_lock);
 		IL_ERR("Restarting adapter due to command queue full\n");
 		queue_work(il->workqueue, &il->restart);
 		return ERR_PTR(-ENOSPC);
@@ -3209,7 +3198,7 @@ il_enqueue_hcmd(struct il_priv *il, struct il_host_cmd *hcmd)
 	meta = &txq->meta[idx];
 
 	if (WARN_ON(meta->flags & CMD_MAPPED)) {
-		spin_unlock_irqrestore(&il->hcmd_lock, flags);
+		spin_unlock_bh(&il->hcmd_lock);
 		return ERR_PTR(-ENOSPC);
 	}
 
@@ -3229,7 +3218,7 @@ il_enqueue_hcmd(struct il_priv *il, struct il_host_cmd *hcmd)
 				  PCI_DMA_BIDIRECTIONAL);
 	if (unlikely(pci_dma_mapping_error(il->pci_dev, dev_addr))) {
 		meta->flags = 0;
-		spin_unlock_irqrestore(&il->hcmd_lock, flags);
+		spin_unlock_bh(&il->hcmd_lock);
 		return ERR_PTR(-ENOMEM);
 	}
 	dma_unmap_addr_set(meta, mapping, dev_addr);
@@ -3252,7 +3241,7 @@ il_enqueue_hcmd(struct il_priv *il, struct il_host_cmd *hcmd)
 	q->write_ptr = il_queue_inc_wrap(q->write_ptr, q->n_bd);
 	il_txq_update_wptr(il, txq);
 
-	spin_unlock_irqrestore(&il->hcmd_lock, flags);
+	spin_unlock_bh(&il->hcmd_lock);
 
 	return meta;
 }
@@ -3301,7 +3290,6 @@ il_tx_cmd_complete(struct il_priv *il, struct il_rx_pkt *pkt)
 	struct il_device_cmd *dcmd;
 	struct il_cmd_meta *meta;
 	struct il_tx_queue *txq = &il->txq[il->cmd_queue];
-	unsigned long flags;
 
 	if (WARN_ON_ONCE(txq_id != il->cmd_queue)) {
 		il_print_hex_error(il, pkt, 32);
@@ -3320,7 +3308,7 @@ il_tx_cmd_complete(struct il_priv *il, struct il_rx_pkt *pkt)
 	if (meta->callback)
 		meta->callback(il, dcmd, pkt);
 
-	spin_lock_irqsave(&il->hcmd_lock, flags);
+	spin_lock_bh(&il->hcmd_lock);
 
 	if (meta->flags & CMD_COPY_PKT)
 		memcpy(meta->hcmd->pkt_ptr, pkt, sizeof(*pkt));
@@ -3337,7 +3325,7 @@ il_tx_cmd_complete(struct il_priv *il, struct il_rx_pkt *pkt)
 	/* Mark as unmapped */
 	meta->flags = 0;
 
-	spin_unlock_irqrestore(&il->hcmd_lock, flags);
+	spin_unlock_bh(&il->hcmd_lock);
 }
 EXPORT_SYMBOL(il_tx_cmd_complete);
 
@@ -4235,11 +4223,10 @@ EXPORT_SYMBOL(_il_apm_stop);
 void
 il_apm_stop(struct il_priv *il)
 {
-	unsigned long flags;
 
-	spin_lock_irqsave(&il->reg_lock, flags);
+	spin_lock_bh(&il->reg_lock);
 	_il_apm_stop(il);
-	spin_unlock_irqrestore(&il->reg_lock, flags);
+	spin_unlock_bh(&il->reg_lock);
 }
 EXPORT_SYMBOL(il_apm_stop);
 
@@ -4495,7 +4482,6 @@ il_mac_conf_tx(struct ieee80211_hw *hw, struct ieee80211_vif *vif, u16 queue,
 	       const struct ieee80211_tx_queue_params *params)
 {
 	struct il_priv *il = hw->priv;
-	unsigned long flags;
 	int q;
 
 	D_MAC80211("enter\n");
@@ -4512,7 +4498,7 @@ il_mac_conf_tx(struct ieee80211_hw *hw, struct ieee80211_vif *vif, u16 queue,
 
 	q = AC_NUM - 1 - queue;
 
-	spin_lock_irqsave(&il->lock, flags);
+	spin_lock_bh(&il->lock);
 
 	il->qos_data.def_qos_parm.ac[q].cw_min =
 	    cpu_to_le16(params->cw_min);
@@ -4524,7 +4510,7 @@ il_mac_conf_tx(struct ieee80211_hw *hw, struct ieee80211_vif *vif, u16 queue,
 
 	il->qos_data.def_qos_parm.ac[q].reserved1 = 0;
 
-	spin_unlock_irqrestore(&il->lock, flags);
+	spin_unlock_bh(&il->lock);
 
 	D_MAC80211("leave\n");
 	return 0;
@@ -5023,7 +5009,6 @@ il_mac_config(struct ieee80211_hw *hw, u32 changed)
 	struct ieee80211_conf *conf = &hw->conf;
 	struct ieee80211_channel *channel = conf->chandef.chan;
 	struct il_ht_config *ht_conf = &il->current_ht_config;
-	unsigned long flags = 0;
 	int ret = 0;
 	u16 ch;
 	int scan_active = 0;
@@ -5077,7 +5062,7 @@ il_mac_config(struct ieee80211_hw *hw, u32 changed)
 			goto set_ch_out;
 		}
 
-		spin_lock_irqsave(&il->lock, flags);
+		spin_lock_bh(&il->lock);
 
 		/* Configure HT40 channels */
 		if (il->ht.enabled != conf_is_ht(conf)) {
@@ -5118,7 +5103,7 @@ il_mac_config(struct ieee80211_hw *hw, u32 changed)
 
 		il_set_flags_for_band(il, channel->band, il->vif);
 
-		spin_unlock_irqrestore(&il->lock, flags);
+		spin_unlock_bh(&il->lock);
 
 		if (il->ops->update_bcast_stations)
 			ret = il->ops->update_bcast_stations(il);
@@ -5171,12 +5156,11 @@ void
 il_mac_reset_tsf(struct ieee80211_hw *hw, struct ieee80211_vif *vif)
 {
 	struct il_priv *il = hw->priv;
-	unsigned long flags;
 
 	mutex_lock(&il->mutex);
 	D_MAC80211("enter: type %d, addr %pM\n", vif->type, vif->addr);
 
-	spin_lock_irqsave(&il->lock, flags);
+	spin_lock_bh(&il->lock);
 
 	memset(&il->current_ht_config, 0, sizeof(struct il_ht_config));
 
@@ -5186,7 +5170,7 @@ il_mac_reset_tsf(struct ieee80211_hw *hw, struct ieee80211_vif *vif)
 	il->beacon_skb = NULL;
 	il->timestamp = 0;
 
-	spin_unlock_irqrestore(&il->lock, flags);
+	spin_unlock_bh(&il->lock);
 
 	il_scan_cancel_timeout(il, 100);
 	if (!il_is_ready_rf(il)) {
@@ -5283,7 +5267,6 @@ static void
 il_beacon_update(struct ieee80211_hw *hw, struct ieee80211_vif *vif)
 {
 	struct il_priv *il = hw->priv;
-	unsigned long flags;
 	__le64 timestamp;
 	struct sk_buff *skb = ieee80211_beacon_get(hw, vif);
 
@@ -5300,7 +5283,7 @@ il_beacon_update(struct ieee80211_hw *hw, struct ieee80211_vif *vif)
 		return;
 	}
 
-	spin_lock_irqsave(&il->lock, flags);
+	spin_lock_bh(&il->lock);
 
 	if (il->beacon_skb)
 		dev_kfree_skb(il->beacon_skb);
@@ -5311,7 +5294,7 @@ il_beacon_update(struct ieee80211_hw *hw, struct ieee80211_vif *vif)
 	il->timestamp = le64_to_cpu(timestamp);
 
 	D_MAC80211("leave\n");
-	spin_unlock_irqrestore(&il->lock, flags);
+	spin_unlock_bh(&il->lock);
 
 	if (!il_is_ready_rf(il)) {
 		D_MAC80211("leave - RF not ready\n");
@@ -5338,12 +5321,11 @@ il_mac_bss_info_changed(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 	}
 
 	if (changes & BSS_CHANGED_QOS) {
-		unsigned long flags;
 
-		spin_lock_irqsave(&il->lock, flags);
+		spin_lock_bh(&il->lock);
 		il->qos_data.qos_active = bss_conf->qos;
 		il_update_qos(il);
-		spin_unlock_irqrestore(&il->lock, flags);
+		spin_unlock_bh(&il->lock);
 	}
 
 	if (changes & BSS_CHANGED_BEACON_ENABLED) {
@@ -5487,60 +5469,56 @@ irqreturn_t
 il_isr(int irq, void *data)
 {
 	struct il_priv *il = data;
-	u32 inta, inta_mask;
-	u32 inta_fh;
-	unsigned long flags;
+	u32 inta, inta_fh;
+	int ret = IRQ_HANDLED;
+
 	if (!il)
 		return IRQ_NONE;
 
-	spin_lock_irqsave(&il->lock, flags);
+	spin_lock(&il->irq_lock);
 
-	/* Disable (but don't clear!) interrupts here to avoid
-	 *    back-to-back ISRs and sporadic interrupts from our NIC.
-	 * If we have something to service, the tasklet will re-enable ints.
-	 * If we *don't* have something, we'll re-enable before leaving here. */
-	inta_mask = _il_rd(il, CSR_INT_MASK);	/* just for debug */
+	/* Disable (but don't clear!) interrupts here to avoid back-to-back
+	 * ISRs and sporadic interrupts from our NIC. If we have something to
+	 * service, the tasklet will re-enable ints, otherwise we will do that.
+	 */
 	_il_wr(il, CSR_INT_MASK, 0x00000000);
 
-	/* Discover which interrupts are active/pending */
+	/* Discover which interrupts are active/pending. */
 	inta = _il_rd(il, CSR_INT);
 	inta_fh = _il_rd(il, CSR_FH_INT_STATUS);
 
-	/* Ignore interrupt if there's nothing in NIC to service.
-	 * This may be due to IRQ shared with another device,
-	 * or due to sporadic interrupts thrown from our NIC. */
-	if (!inta && !inta_fh) {
-		D_ISR("Ignore interrupt, inta == 0, inta_fh == 0\n");
-		goto none;
+	D_ISR("ISR inta 0x%08x, mask 0x%08x, fh 0x%08x\n",
+	      inta, _il_rd(il, CSR_INT_MASK), inta_fh);
+
+	/* Ignore interrupt if there's nothing in NIC to service. This might
+	 * happen due to IRQ shared with another device, or due to sporadic
+	 * interrupts thrown from our NIC.
+	 */
+	if (unlikely(!inta && !inta_fh)) {
+		D_ISR("Ignore interrupt.\n");
+		/* Re-enable interrupts here since we don't have anything to
+		 * service, but only if interrupts were disabled here.
+		 */
+		if (test_bit(S_INT_ENABLED, &il->status))
+			_il_wr(il, CSR_INT_MASK, il->inta_mask);
+		ret = IRQ_NONE;
+		goto out;
 	}
 
-	if (inta == 0xFFFFFFFF || (inta & 0xFFFFFFF0) == 0xa5a5a5a0) {
-		/* Hardware disappeared. It might have already raised
-		 * an interrupt */
-		IL_WARN("HARDWARE GONE?? INTA == 0x%08x\n", inta);
-		goto unplugged;
+	if (unlikely(inta == 0xffffffff || 0xa5a5a5a0 == (inta & 0xfffffff0))) {
+		/* Hardware disappeared ? */
+		IL_WARN("HARDWARE GONE? INTA == 0x%08x\n", inta);
+		goto out;
 	}
-
-	D_ISR("ISR inta 0x%08x, enabled 0x%08x, fh 0x%08x\n", inta, inta_mask,
-	      inta_fh);
 
 	inta &= ~CSR_INT_BIT_SCD;
 
-	/* il_irq_tasklet() will service interrupts and re-enable them */
+	/* il_irq_tasklet() will service interrupts and re-enable them. */
 	if (likely(inta || inta_fh))
 		tasklet_schedule(&il->irq_tasklet);
-
-unplugged:
-	spin_unlock_irqrestore(&il->lock, flags);
-	return IRQ_HANDLED;
-
-none:
-	/* re-enable interrupts here since we don't have anything to service. */
-	/* only Re-enable if disabled by irq */
-	if (test_bit(S_INT_ENABLED, &il->status))
-		il_enable_interrupts(il);
-	spin_unlock_irqrestore(&il->lock, flags);
-	return IRQ_NONE;
+out:
+	spin_unlock(&il->irq_lock);
+	return ret;
 }
 EXPORT_SYMBOL(il_isr);
 

@@ -164,15 +164,14 @@ il4965_set_pwr_vmain(struct il_priv *il)
 int
 il4965_hw_nic_init(struct il_priv *il)
 {
-	unsigned long flags;
 	struct il_rx_queue *rxq = &il->rxq;
 	int ret;
 
-	spin_lock_irqsave(&il->lock, flags);
+	spin_lock_bh(&il->lock);
 	il_apm_init(il);
 	/* Set interrupt coalescing calibration timer to default (512 usecs) */
 	il_write8(il, CSR_INT_COALESCING, IL_HOST_INT_CALIB_TIMEOUT_DEF);
-	spin_unlock_irqrestore(&il->lock, flags);
+	spin_unlock_bh(&il->lock);
 
 	il4965_set_pwr_vmain(il);
 	il4965_nic_config(il);
@@ -1444,10 +1443,10 @@ il4965_tx_skb(struct il_priv *il,
 	u8 wait_write_ptr = 0;
 	u8 tid = 0;
 	u8 *qc = NULL;
-	unsigned long flags;
 	bool is_agg = false;
 
-	spin_lock_irqsave(&il->lock, flags);
+	spin_lock(&il->lock);
+
 	if (il_is_rfkill(il)) {
 		D_DROP("Dropping - RF KILL\n");
 		goto drop_unlock;
@@ -1656,7 +1655,8 @@ il4965_tx_skb(struct il_priv *il,
 	/* Tell device the write idx *just past* this latest filled TFD */
 	q->write_ptr = il_queue_inc_wrap(q->write_ptr, q->n_bd);
 	il_txq_update_wptr(il, txq);
-	spin_unlock_irqrestore(&il->lock, flags);
+
+	spin_unlock(&il->lock);
 
 	/*
 	 * At this point the frame is "transmitted" successfully
@@ -1677,10 +1677,10 @@ il4965_tx_skb(struct il_priv *il,
 
 	if (il_queue_space(q) < q->high_mark && il->mac80211_registered) {
 		if (wait_write_ptr) {
-			spin_lock_irqsave(&il->lock, flags);
+			spin_lock(&il->lock);
 			txq->need_update = 1;
 			il_txq_update_wptr(il, txq);
-			spin_unlock_irqrestore(&il->lock, flags);
+			spin_unlock(&il->lock);
 		} else {
 			il_stop_queue(il, txq);
 		}
@@ -1689,7 +1689,7 @@ il4965_tx_skb(struct il_priv *il,
 	return 0;
 
 drop_unlock:
-	spin_unlock_irqrestore(&il->lock, flags);
+	spin_unlock(&il->lock);
 	return -1;
 }
 
@@ -1751,7 +1751,6 @@ int
 il4965_txq_ctx_alloc(struct il_priv *il)
 {
 	int ret, txq_id;
-	unsigned long flags;
 
 	/* Free all tx/cmd queues and keep-warm buffer */
 	il4965_hw_txq_ctx_free(il);
@@ -1775,7 +1774,7 @@ il4965_txq_ctx_alloc(struct il_priv *il)
 	if (ret)
 		goto error;
 
-	spin_lock_irqsave(&il->lock, flags);
+	spin_lock_bh(&il->lock);
 
 	/* Turn off all Tx DMA fifos */
 	il4965_txq_set_sched(il, 0);
@@ -1783,7 +1782,7 @@ il4965_txq_ctx_alloc(struct il_priv *il)
 	/* Tell NIC where to find the "keep warm" buffer */
 	il_wr(il, FH49_KW_MEM_ADDR_REG, il->kw.dma >> 4);
 
-	spin_unlock_irqrestore(&il->lock, flags);
+	spin_unlock_bh(&il->lock);
 
 	/* Alloc and init all Tx queues, including the command queue (#4/#9) */
 	for (txq_id = 0; txq_id < il->hw_params.max_txq_num; txq_id++) {
@@ -1809,16 +1808,15 @@ void
 il4965_txq_ctx_reset(struct il_priv *il)
 {
 	int txq_id;
-	unsigned long flags;
 
-	spin_lock_irqsave(&il->lock, flags);
+	spin_lock_bh(&il->lock);
 
 	/* Turn off all Tx DMA fifos */
 	il4965_txq_set_sched(il, 0);
 	/* Tell NIC where to find the "keep warm" buffer */
 	il_wr(il, FH49_KW_MEM_ADDR_REG, il->kw.dma >> 4);
 
-	spin_unlock_irqrestore(&il->lock, flags);
+	spin_unlock_bh(&il->lock);
 
 	/* Alloc and init all Tx queues, including the command queue (#4) */
 	for (txq_id = 0; txq_id < il->hw_params.max_txq_num; txq_id++)
@@ -1932,7 +1930,6 @@ static int
 il4965_txq_agg_enable(struct il_priv *il, int txq_id, int tx_fifo, int sta_id,
 		      int tid, u16 ssn_idx)
 {
-	unsigned long flags;
 	u16 ra_tid;
 	int ret;
 
@@ -1953,7 +1950,7 @@ il4965_txq_agg_enable(struct il_priv *il, int txq_id, int tx_fifo, int sta_id,
 	if (ret)
 		return ret;
 
-	spin_lock_irqsave(&il->lock, flags);
+	spin_lock_bh(&il->lock);
 
 	/* Stop this Tx queue before configuring it */
 	il4965_tx_queue_stop_scheduler(il, txq_id);
@@ -1989,7 +1986,7 @@ il4965_txq_agg_enable(struct il_priv *il, int txq_id, int tx_fifo, int sta_id,
 	/* Set up Status area in SRAM, map to Tx DMA/FIFO, activate the queue */
 	il4965_tx_queue_set_status(il, &il->txq[txq_id], tx_fifo, 1);
 
-	spin_unlock_irqrestore(&il->lock, flags);
+	spin_unlock_bh(&il->lock);
 
 	return 0;
 }
@@ -2002,7 +1999,6 @@ il4965_tx_agg_start(struct il_priv *il, struct ieee80211_vif *vif,
 	int tx_fifo;
 	int txq_id;
 	int ret;
-	unsigned long flags;
 	struct il_tid_data *tid_data;
 
 	/* FIXME: warning if tx fifo not found ? */
@@ -2031,18 +2027,18 @@ il4965_tx_agg_start(struct il_priv *il, struct ieee80211_vif *vif,
 		return -ENXIO;
 	}
 
-	spin_lock_irqsave(&il->sta_lock, flags);
+	spin_lock_bh(&il->sta_lock);
 	tid_data = &il->stations[sta_id].tid[tid];
 	*ssn = IEEE80211_SEQ_TO_SN(tid_data->seq_number);
 	tid_data->agg.txq_id = txq_id;
 	il_set_swq_id(&il->txq[txq_id], il4965_get_ac_from_tid(tid), txq_id);
-	spin_unlock_irqrestore(&il->sta_lock, flags);
+	spin_unlock_bh(&il->sta_lock);
 
 	ret = il4965_txq_agg_enable(il, txq_id, tx_fifo, sta_id, tid, *ssn);
 	if (ret)
 		return ret;
 
-	spin_lock_irqsave(&il->sta_lock, flags);
+	spin_lock_bh(&il->sta_lock);
 	tid_data = &il->stations[sta_id].tid[tid];
 	if (tid_data->tfds_in_queue == 0) {
 		D_HT("HW queue is empty\n");
@@ -2053,7 +2049,7 @@ il4965_tx_agg_start(struct il_priv *il, struct ieee80211_vif *vif,
 		     tid_data->tfds_in_queue);
 		tid_data->agg.state = IL_EMPTYING_HW_QUEUE_ADDBA;
 	}
-	spin_unlock_irqrestore(&il->sta_lock, flags);
+	spin_unlock_bh(&il->sta_lock);
 	return ret;
 }
 
@@ -2097,7 +2093,6 @@ il4965_tx_agg_stop(struct il_priv *il, struct ieee80211_vif *vif,
 	int tx_fifo_id, txq_id, sta_id, ssn;
 	struct il_tid_data *tid_data;
 	int write_ptr, read_ptr;
-	unsigned long flags;
 
 	/* FIXME: warning if tx_fifo_id not found ? */
 	tx_fifo_id = il4965_get_fifo_from_tid(tid);
@@ -2111,7 +2106,7 @@ il4965_tx_agg_stop(struct il_priv *il, struct ieee80211_vif *vif,
 		return -ENXIO;
 	}
 
-	spin_lock_irqsave(&il->sta_lock, flags);
+	spin_lock_bh(&il->sta_lock);
 
 	tid_data = &il->stations[sta_id].tid[tid];
 	ssn = (tid_data->seq_number & IEEE80211_SCTL_SEQ) >> 4;
@@ -2141,7 +2136,7 @@ il4965_tx_agg_stop(struct il_priv *il, struct ieee80211_vif *vif,
 		D_HT("Stopping a non empty AGG HW QUEUE\n");
 		il->stations[sta_id].tid[tid].agg.state =
 		    IL_EMPTYING_HW_QUEUE_DELBA;
-		spin_unlock_irqrestore(&il->sta_lock, flags);
+		spin_unlock_bh(&il->sta_lock);
 		return 0;
 	}
 
@@ -2161,7 +2156,7 @@ turn_off:
 	 *  mac80211 to clean up it own data.
 	 */
 	il4965_txq_agg_disable(il, txq_id, ssn, tx_fifo_id);
-	spin_unlock_irqrestore(&il->lock, flags);
+	spin_unlock_bh(&il->lock);
 
 	ieee80211_stop_tx_ba_cb_irqsafe(vif, sta->addr, tid);
 
@@ -2351,7 +2346,6 @@ il4965_find_station(struct il_priv *il, const u8 *addr)
 	int i;
 	int start = 0;
 	int ret = IL_INVALID_STATION;
-	unsigned long flags;
 
 	if (il->iw_mode == NL80211_IFTYPE_ADHOC)
 		start = IL_STA_ID;
@@ -2359,7 +2353,7 @@ il4965_find_station(struct il_priv *il, const u8 *addr)
 	if (is_broadcast_ether_addr(addr))
 		return il->hw_params.bcast_id;
 
-	spin_lock_irqsave(&il->sta_lock, flags);
+	spin_lock_bh(&il->sta_lock);
 	for (i = start; i < il->hw_params.max_stations; i++)
 		if (il->stations[i].used &&
 		    ether_addr_equal(il->stations[i].sta.sta.addr, addr)) {
@@ -2383,7 +2377,7 @@ out:
 		       ret);
 		ret = IL_INVALID_STATION;
 	}
-	spin_unlock_irqrestore(&il->sta_lock, flags);
+	spin_unlock_bh(&il->sta_lock);
 	return ret;
 }
 
@@ -2553,7 +2547,6 @@ il4965_hdl_tx(struct il_priv *il, struct il_rx_pkt *pkt)
 	int sta_id;
 	int freed;
 	u8 *qc = NULL;
-	unsigned long flags;
 
 	if (idx >= txq->q.n_bd || il_queue_used(&txq->q, idx) == 0) {
 		IL_ERR("Read idx for DMA queue txq_id (%d) idx %d "
@@ -2593,7 +2586,8 @@ il4965_hdl_tx(struct il_priv *il, struct il_rx_pkt *pkt)
 		D_INFO("Stopped queues - RX waiting on passive channel\n");
 	}
 
-	spin_lock_irqsave(&il->sta_lock, flags);
+	spin_lock(&il->sta_lock);
+
 	if (txq->sched_retry) {
 		const u32 scd_ssn = il4965_get_scd_ssn(tx_resp);
 		struct il_ht_agg *agg = NULL;
@@ -2650,7 +2644,7 @@ il4965_hdl_tx(struct il_priv *il, struct il_rx_pkt *pkt)
 
 	il4965_check_abort_status(il, tx_resp->frame_count, status);
 
-	spin_unlock_irqrestore(&il->sta_lock, flags);
+	spin_unlock(&il->sta_lock);
 }
 
 /**
@@ -2692,7 +2686,6 @@ il4965_hdl_compressed_ba(struct il_priv *il, struct il_rx_pkt *pkt)
 	int idx;
 	int sta_id;
 	int tid;
-	unsigned long flags;
 
 	/* "flow" corresponds to Tx queue */
 	u16 scd_flow = le16_to_cpu(ba_resp->scd_flow);
@@ -2725,7 +2718,7 @@ il4965_hdl_compressed_ba(struct il_priv *il, struct il_rx_pkt *pkt)
 	/* Find idx just before block-ack win */
 	idx = il_queue_dec_wrap(ba_resp_scd_ssn & 0xff, txq->q.n_bd);
 
-	spin_lock_irqsave(&il->sta_lock, flags);
+	spin_lock(&il->sta_lock);
 
 	D_TX_REPLY("N_COMPRESSED_BA [%d] Received from %pM, " "sta_id = %d\n",
 		   agg->wait_for_ba, (u8 *) &ba_resp->sta_addr_lo32,
@@ -2756,7 +2749,7 @@ il4965_hdl_compressed_ba(struct il_priv *il, struct il_rx_pkt *pkt)
 		il4965_txq_check_empty(il, sta_id, tid, scd_flow);
 	}
 
-	spin_unlock_irqrestore(&il->sta_lock, flags);
+	spin_unlock(&il->sta_lock);
 }
 
 #ifdef CONFIG_IWLEGACY_DEBUG
@@ -2862,7 +2855,6 @@ il4965_add_bssid_station(struct il_priv *il, const u8 *addr, u8 *sta_id_r)
 	int ret;
 	u8 sta_id;
 	struct il_link_quality_cmd *link_cmd;
-	unsigned long flags;
 
 	if (sta_id_r)
 		*sta_id_r = IL_INVALID_STATION;
@@ -2876,9 +2868,9 @@ il4965_add_bssid_station(struct il_priv *il, const u8 *addr, u8 *sta_id_r)
 	if (sta_id_r)
 		*sta_id_r = sta_id;
 
-	spin_lock_irqsave(&il->sta_lock, flags);
+	spin_lock_bh(&il->sta_lock);
 	il->stations[sta_id].used |= IL_STA_LOCAL;
-	spin_unlock_irqrestore(&il->sta_lock, flags);
+	spin_unlock_bh(&il->sta_lock);
 
 	/* Set up default rate scaling table in device's station table */
 	link_cmd = il4965_sta_alloc_lq(il, sta_id);
@@ -2892,9 +2884,9 @@ il4965_add_bssid_station(struct il_priv *il, const u8 *addr, u8 *sta_id_r)
 	if (ret)
 		IL_ERR("Link quality command failed (%d)\n", ret);
 
-	spin_lock_irqsave(&il->sta_lock, flags);
+	spin_lock_bh(&il->sta_lock);
 	il->stations[sta_id].lq = link_cmd;
-	spin_unlock_irqrestore(&il->sta_lock, flags);
+	spin_unlock_bh(&il->sta_lock);
 
 	return 0;
 }
@@ -3008,7 +3000,6 @@ static int
 il4965_set_wep_dynamic_key_info(struct il_priv *il,
 				struct ieee80211_key_conf *keyconf, u8 sta_id)
 {
-	unsigned long flags;
 	__le16 key_flags = 0;
 	struct il_addsta_cmd sta_cmd;
 
@@ -3026,7 +3017,7 @@ il4965_set_wep_dynamic_key_info(struct il_priv *il,
 	if (sta_id == il->hw_params.bcast_id)
 		key_flags |= STA_KEY_MULTICAST_MSK;
 
-	spin_lock_irqsave(&il->sta_lock, flags);
+	spin_lock_bh(&il->sta_lock);
 
 	il->stations[sta_id].keyinfo.cipher = keyconf->cipher;
 	il->stations[sta_id].keyinfo.keylen = keyconf->keylen;
@@ -3053,7 +3044,7 @@ il4965_set_wep_dynamic_key_info(struct il_priv *il,
 
 	memcpy(&sta_cmd, &il->stations[sta_id].sta,
 	       sizeof(struct il_addsta_cmd));
-	spin_unlock_irqrestore(&il->sta_lock, flags);
+	spin_unlock_bh(&il->sta_lock);
 
 	return il_send_add_sta(il, &sta_cmd, CMD_SYNC);
 }
@@ -3062,7 +3053,6 @@ static int
 il4965_set_ccmp_dynamic_key_info(struct il_priv *il,
 				 struct ieee80211_key_conf *keyconf, u8 sta_id)
 {
-	unsigned long flags;
 	__le16 key_flags = 0;
 	struct il_addsta_cmd sta_cmd;
 
@@ -3077,7 +3067,7 @@ il4965_set_ccmp_dynamic_key_info(struct il_priv *il,
 
 	keyconf->flags |= IEEE80211_KEY_FLAG_GENERATE_IV;
 
-	spin_lock_irqsave(&il->sta_lock, flags);
+	spin_lock_bh(&il->sta_lock);
 	il->stations[sta_id].keyinfo.cipher = keyconf->cipher;
 	il->stations[sta_id].keyinfo.keylen = keyconf->keylen;
 
@@ -3101,7 +3091,7 @@ il4965_set_ccmp_dynamic_key_info(struct il_priv *il,
 
 	memcpy(&sta_cmd, &il->stations[sta_id].sta,
 	       sizeof(struct il_addsta_cmd));
-	spin_unlock_irqrestore(&il->sta_lock, flags);
+	spin_unlock_bh(&il->sta_lock);
 
 	return il_send_add_sta(il, &sta_cmd, CMD_SYNC);
 }
@@ -3110,7 +3100,6 @@ static int
 il4965_set_tkip_dynamic_key_info(struct il_priv *il,
 				 struct ieee80211_key_conf *keyconf, u8 sta_id)
 {
-	unsigned long flags;
 	int ret = 0;
 	__le16 key_flags = 0;
 
@@ -3124,7 +3113,7 @@ il4965_set_tkip_dynamic_key_info(struct il_priv *il,
 	keyconf->flags |= IEEE80211_KEY_FLAG_GENERATE_IV;
 	keyconf->flags |= IEEE80211_KEY_FLAG_GENERATE_MMIC;
 
-	spin_lock_irqsave(&il->sta_lock, flags);
+	spin_lock_bh(&il->sta_lock);
 
 	il->stations[sta_id].keyinfo.cipher = keyconf->cipher;
 	il->stations[sta_id].keyinfo.keylen = 16;
@@ -3146,7 +3135,7 @@ il4965_set_tkip_dynamic_key_info(struct il_priv *il,
 
 	memcpy(il->stations[sta_id].sta.key.key, keyconf->key, 16);
 
-	spin_unlock_irqrestore(&il->sta_lock, flags);
+	spin_unlock_bh(&il->sta_lock);
 
 	return ret;
 }
@@ -3156,7 +3145,6 @@ il4965_update_tkip_key(struct il_priv *il, struct ieee80211_key_conf *keyconf,
 		       struct ieee80211_sta *sta, u32 iv32, u16 *phase1key)
 {
 	u8 sta_id;
-	unsigned long flags;
 	int i;
 
 	if (il_scan_cancel(il)) {
@@ -3169,7 +3157,7 @@ il4965_update_tkip_key(struct il_priv *il, struct ieee80211_key_conf *keyconf,
 	if (sta_id == IL_INVALID_STATION)
 		return;
 
-	spin_lock_irqsave(&il->sta_lock, flags);
+	spin_lock_bh(&il->sta_lock);
 
 	il->stations[sta_id].sta.key.tkip_rx_tsc_byte2 = (u8) iv32;
 
@@ -3182,14 +3170,13 @@ il4965_update_tkip_key(struct il_priv *il, struct ieee80211_key_conf *keyconf,
 
 	il_send_add_sta(il, &il->stations[sta_id].sta, CMD_ASYNC);
 
-	spin_unlock_irqrestore(&il->sta_lock, flags);
+	spin_unlock_bh(&il->sta_lock);
 }
 
 int
 il4965_remove_dynamic_key(struct il_priv *il,
 			  struct ieee80211_key_conf *keyconf, u8 sta_id)
 {
-	unsigned long flags;
 	u16 key_flags;
 	u8 keyidx;
 	struct il_addsta_cmd sta_cmd;
@@ -3198,7 +3185,7 @@ il4965_remove_dynamic_key(struct il_priv *il,
 
 	il->_4965.key_mapping_keys--;
 
-	spin_lock_irqsave(&il->sta_lock, flags);
+	spin_lock_bh(&il->sta_lock);
 	key_flags = le16_to_cpu(il->stations[sta_id].sta.key.key_flags);
 	keyidx = (key_flags >> STA_KEY_FLG_KEYID_POS) & 0x3;
 
@@ -3210,14 +3197,14 @@ il4965_remove_dynamic_key(struct il_priv *il,
 		 * been replaced by another one with different idx.
 		 * Don't do anything and return ok
 		 */
-		spin_unlock_irqrestore(&il->sta_lock, flags);
+		spin_unlock_bh(&il->sta_lock);
 		return 0;
 	}
 
 	if (il->stations[sta_id].sta.key.key_flags & STA_KEY_FLG_INVALID) {
 		IL_WARN("Removing wrong key %d 0x%x\n", keyconf->keyidx,
 			key_flags);
-		spin_unlock_irqrestore(&il->sta_lock, flags);
+		spin_unlock_bh(&il->sta_lock);
 		return 0;
 	}
 
@@ -3236,12 +3223,12 @@ il4965_remove_dynamic_key(struct il_priv *il,
 	if (il_is_rfkill(il)) {
 		D_WEP
 		    ("Not sending C_ADD_STA command because RFKILL enabled.\n");
-		spin_unlock_irqrestore(&il->sta_lock, flags);
+		spin_unlock_bh(&il->sta_lock);
 		return 0;
 	}
 	memcpy(&sta_cmd, &il->stations[sta_id].sta,
 	       sizeof(struct il_addsta_cmd));
-	spin_unlock_irqrestore(&il->sta_lock, flags);
+	spin_unlock_bh(&il->sta_lock);
 
 	return il_send_add_sta(il, &sta_cmd, CMD_SYNC);
 }
@@ -3293,21 +3280,20 @@ int
 il4965_alloc_bcast_station(struct il_priv *il)
 {
 	struct il_link_quality_cmd *link_cmd;
-	unsigned long flags;
 	u8 sta_id;
 
-	spin_lock_irqsave(&il->sta_lock, flags);
+	spin_lock_bh(&il->sta_lock);
 	sta_id = il_prep_station(il, il_bcast_addr, false, NULL);
 	if (sta_id == IL_INVALID_STATION) {
 		IL_ERR("Unable to prepare broadcast station\n");
-		spin_unlock_irqrestore(&il->sta_lock, flags);
+		spin_unlock_bh(&il->sta_lock);
 
 		return -EINVAL;
 	}
 
 	il->stations[sta_id].used |= IL_STA_DRIVER_ACTIVE;
 	il->stations[sta_id].used |= IL_STA_BCAST;
-	spin_unlock_irqrestore(&il->sta_lock, flags);
+	spin_unlock_bh(&il->sta_lock);
 
 	link_cmd = il4965_sta_alloc_lq(il, sta_id);
 	if (!link_cmd) {
@@ -3316,9 +3302,9 @@ il4965_alloc_bcast_station(struct il_priv *il)
 		return -ENOMEM;
 	}
 
-	spin_lock_irqsave(&il->sta_lock, flags);
+	spin_lock_bh(&il->sta_lock);
 	il->stations[sta_id].lq = link_cmd;
-	spin_unlock_irqrestore(&il->sta_lock, flags);
+	spin_unlock_bh(&il->sta_lock);
 
 	return 0;
 }
@@ -3332,7 +3318,6 @@ il4965_alloc_bcast_station(struct il_priv *il)
 static int
 il4965_update_bcast_station(struct il_priv *il)
 {
-	unsigned long flags;
 	struct il_link_quality_cmd *link_cmd;
 	u8 sta_id = il->hw_params.bcast_id;
 
@@ -3342,13 +3327,13 @@ il4965_update_bcast_station(struct il_priv *il)
 		return -ENOMEM;
 	}
 
-	spin_lock_irqsave(&il->sta_lock, flags);
+	spin_lock_bh(&il->sta_lock);
 	if (il->stations[sta_id].lq)
 		kfree(il->stations[sta_id].lq);
 	else
 		D_INFO("Bcast sta rate scaling has not been initialized.\n");
 	il->stations[sta_id].lq = link_cmd;
-	spin_unlock_irqrestore(&il->sta_lock, flags);
+	spin_unlock_bh(&il->sta_lock);
 
 	return 0;
 }
@@ -3365,19 +3350,18 @@ il4965_update_bcast_stations(struct il_priv *il)
 int
 il4965_sta_tx_modify_enable_tid(struct il_priv *il, int sta_id, int tid)
 {
-	unsigned long flags;
 	struct il_addsta_cmd sta_cmd;
 
 	lockdep_assert_held(&il->mutex);
 
 	/* Remove "disable" flag, to enable Tx for this TID */
-	spin_lock_irqsave(&il->sta_lock, flags);
+	spin_lock_bh(&il->sta_lock);
 	il->stations[sta_id].sta.sta.modify_mask = STA_MODIFY_TID_DISABLE_TX;
 	il->stations[sta_id].sta.tid_disable_tx &= cpu_to_le16(~(1 << tid));
 	il->stations[sta_id].sta.mode = STA_CONTROL_MODIFY_MSK;
 	memcpy(&sta_cmd, &il->stations[sta_id].sta,
 	       sizeof(struct il_addsta_cmd));
-	spin_unlock_irqrestore(&il->sta_lock, flags);
+	spin_unlock_bh(&il->sta_lock);
 
 	return il_send_add_sta(il, &sta_cmd, CMD_SYNC);
 }
@@ -3386,7 +3370,6 @@ int
 il4965_sta_rx_agg_start(struct il_priv *il, struct ieee80211_sta *sta, int tid,
 			u16 ssn)
 {
-	unsigned long flags;
 	int sta_id;
 	struct il_addsta_cmd sta_cmd;
 
@@ -3396,7 +3379,7 @@ il4965_sta_rx_agg_start(struct il_priv *il, struct ieee80211_sta *sta, int tid,
 	if (sta_id == IL_INVALID_STATION)
 		return -ENXIO;
 
-	spin_lock_irqsave(&il->sta_lock, flags);
+	spin_lock_bh(&il->sta_lock);
 	il->stations[sta_id].sta.station_flags_msk = 0;
 	il->stations[sta_id].sta.sta.modify_mask = STA_MODIFY_ADDBA_TID_MSK;
 	il->stations[sta_id].sta.add_immediate_ba_tid = (u8) tid;
@@ -3404,7 +3387,7 @@ il4965_sta_rx_agg_start(struct il_priv *il, struct ieee80211_sta *sta, int tid,
 	il->stations[sta_id].sta.mode = STA_CONTROL_MODIFY_MSK;
 	memcpy(&sta_cmd, &il->stations[sta_id].sta,
 	       sizeof(struct il_addsta_cmd));
-	spin_unlock_irqrestore(&il->sta_lock, flags);
+	spin_unlock_bh(&il->sta_lock);
 
 	return il_send_add_sta(il, &sta_cmd, CMD_SYNC);
 }
@@ -3412,7 +3395,6 @@ il4965_sta_rx_agg_start(struct il_priv *il, struct ieee80211_sta *sta, int tid,
 int
 il4965_sta_rx_agg_stop(struct il_priv *il, struct ieee80211_sta *sta, int tid)
 {
-	unsigned long flags;
 	int sta_id;
 	struct il_addsta_cmd sta_cmd;
 
@@ -3424,14 +3406,14 @@ il4965_sta_rx_agg_stop(struct il_priv *il, struct ieee80211_sta *sta, int tid)
 		return -ENXIO;
 	}
 
-	spin_lock_irqsave(&il->sta_lock, flags);
+	spin_lock_bh(&il->sta_lock);
 	il->stations[sta_id].sta.station_flags_msk = 0;
 	il->stations[sta_id].sta.sta.modify_mask = STA_MODIFY_DELBA_TID_MSK;
 	il->stations[sta_id].sta.remove_immediate_ba_tid = (u8) tid;
 	il->stations[sta_id].sta.mode = STA_CONTROL_MODIFY_MSK;
 	memcpy(&sta_cmd, &il->stations[sta_id].sta,
 	       sizeof(struct il_addsta_cmd));
-	spin_unlock_irqrestore(&il->sta_lock, flags);
+	spin_unlock_bh(&il->sta_lock);
 
 	return il_send_add_sta(il, &sta_cmd, CMD_SYNC);
 }
@@ -3439,9 +3421,8 @@ il4965_sta_rx_agg_stop(struct il_priv *il, struct ieee80211_sta *sta, int tid)
 void
 il4965_sta_modify_sleep_tx_count(struct il_priv *il, int sta_id, int cnt)
 {
-	unsigned long flags;
 
-	spin_lock_irqsave(&il->sta_lock, flags);
+	spin_lock_bh(&il->sta_lock);
 	il->stations[sta_id].sta.station_flags |= STA_FLG_PWR_SAVE_MSK;
 	il->stations[sta_id].sta.station_flags_msk = STA_FLG_PWR_SAVE_MSK;
 	il->stations[sta_id].sta.sta.modify_mask =
@@ -3449,7 +3430,7 @@ il4965_sta_modify_sleep_tx_count(struct il_priv *il, int sta_id, int cnt)
 	il->stations[sta_id].sta.sleep_tx_count = cpu_to_le16(cnt);
 	il->stations[sta_id].sta.mode = STA_CONTROL_MODIFY_MSK;
 	il_send_add_sta(il, &il->stations[sta_id].sta, CMD_ASYNC);
-	spin_unlock_irqrestore(&il->sta_lock, flags);
+	spin_unlock_bh(&il->sta_lock);
 
 }
 
@@ -3868,7 +3849,6 @@ il4965_hdl_beacon(struct il_priv *il, struct il_rx_pkt *pkt)
 static void
 il4965_perform_ct_kill_task(struct il_priv *il)
 {
-	unsigned long flags;
 
 	D_POWER("Stop all queues\n");
 
@@ -3879,10 +3859,10 @@ il4965_perform_ct_kill_task(struct il_priv *il)
 	       CSR_UCODE_DRV_GP1_REG_BIT_CT_KILL_EXIT);
 	_il_rd(il, CSR_UCODE_DRV_GP1);
 
-	spin_lock_irqsave(&il->reg_lock, flags);
+	spin_lock_bh(&il->reg_lock);
 	if (likely(_il_grab_nic_access(il)))
 		_il_release_nic_access(il);
-	spin_unlock_irqrestore(&il->reg_lock, flags);
+	spin_unlock_bh(&il->reg_lock);
 }
 
 /* Handle notification from uCode that card's power state is changing
@@ -4050,24 +4030,12 @@ il4965_rx_handle(struct il_priv *il)
 		il4965_rx_queue_update(il);
 }
 
-/* call this function to flush any scheduled tasklet */
-static inline void
-il4965_synchronize_irq(struct il_priv *il)
-{
-	/* wait to make sure we flush pending tasklet */
-	synchronize_irq(il->pci_dev->irq);
-	tasklet_kill(&il->irq_tasklet);
-}
-
 static void
 il4965_irq_tasklet(struct il_priv *il)
 {
 	u32 inta, handled = 0;
 	u32 inta_fh;
-	unsigned long flags;
 	u32 i;
-
-	spin_lock_irqsave(&il->lock, flags);
 
 	/* Ack/clear/reset pending uCode interrupts.
 	 * Note:  Some bits in CSR_INT are "OR" of bits in CSR_FH_INT_STATUS,
@@ -4081,10 +4049,8 @@ il4965_irq_tasklet(struct il_priv *il)
 	inta_fh = _il_rd(il, CSR_FH_INT_STATUS);
 	_il_wr(il, CSR_FH_INT_STATUS, inta_fh);
 
-	D_ISR("inta 0x%08x, enabled 0x%08x, fh 0x%08x\n",
+	D_ISR("Start: inta 0x%08x mask 0x%08x fh 0x%08x.\n",
 	      inta, _il_rd(il, CSR_INT_MASK), inta_fh);
-
-	spin_unlock_irqrestore(&il->lock, flags);
 
 	/* Since CSR_INT and CSR_FH_INT_STATUS reads and clears are not
 	 * atomic, make sure that inta covers all the interrupts that
@@ -4118,7 +4084,7 @@ il4965_irq_tasklet(struct il_priv *il)
 
 	/* Alive notification via Rx interrupt will do the real work. */
 	if (inta & CSR_INT_BIT_ALIVE) {
-		D_ISR("Alive interrupt\n");
+		D_ISR("Alive interrupt.\n");
 		il->isr_stats.alive++;
 	}
 
@@ -4174,7 +4140,7 @@ il4965_irq_tasklet(struct il_priv *il)
 	 * and about any Rx buffers made available while asleep.
 	 */
 	if (inta & CSR_INT_BIT_WAKEUP) {
-		D_ISR("Wakeup interrupt\n");
+		D_ISR("Wakeup interrupt.\n");
 
 		il_rxq_update_wptr(il, &il->rxq);
 
@@ -4195,7 +4161,7 @@ il4965_irq_tasklet(struct il_priv *il)
 
 	/* This "Tx" DMA channel is used only for loading uCode */
 	if (inta & CSR_INT_BIT_FH_TX) {
-		D_ISR("uCode load interrupt\n");
+		D_ISR("uCode load interrupt.\n");
 		il->isr_stats.tx++;
 		handled |= CSR_INT_BIT_FH_TX;
 		/* Wake up uCode load routine, now that load is complete */
@@ -4204,7 +4170,7 @@ il4965_irq_tasklet(struct il_priv *il)
 	}
 
 	if (inta & ~handled) {
-		IL_ERR("Unhandled INTA bits 0x%08x\n", inta & ~handled);
+		IL_ERR("Unhandled INTA bits 0x%08x.\n", inta & ~handled);
 		il->isr_stats.unhandled++;
 	}
 
@@ -4222,9 +4188,9 @@ il4965_irq_tasklet(struct il_priv *il)
 	else if (handled & CSR_INT_BIT_RF_KILL)
 		il_enable_rfkill_int(il);
 
-	D_ISR("End inta 0x%08x, enabled 0x%08x, fh 0x%08x, flags 0x%08lx\n",
+	D_ISR("End: inta 0x%08x mask 0x%08x fh 0x%08x.\n",
 	       _il_rd(il, CSR_INT), _il_rd(il, CSR_INT_MASK),
-	       _il_rd(il, CSR_FH_INT_STATUS), flags);
+	       _il_rd(il, CSR_FH_INT_STATUS));
 }
 
 /*****************************************************************************
@@ -4831,13 +4797,12 @@ static void
 il4965_rf_kill_ct_config(struct il_priv *il)
 {
 	struct il_ct_kill_config cmd;
-	unsigned long flags;
 	int ret = 0;
 
-	spin_lock_irqsave(&il->lock, flags);
+	spin_lock_bh(&il->lock);
 	_il_wr(il, CSR_UCODE_DRV_GP1_CLR,
 	       CSR_UCODE_DRV_GP1_REG_BIT_CT_KILL_EXIT);
-	spin_unlock_irqrestore(&il->lock, flags);
+	spin_unlock_bh(&il->lock);
 
 	cmd.critical_temperature_R =
 	    cpu_to_le32(il->hw_params.ct_kill_threshold);
@@ -4867,11 +4832,10 @@ static int
 il4965_alive_notify(struct il_priv *il)
 {
 	u32 a;
-	unsigned long flags;
 	int i, chan;
 	u32 reg_val;
 
-	spin_lock_irqsave(&il->lock, flags);
+	spin_lock_bh(&il->lock);
 
 	/* Clear 4965's internal Tx Scheduler data base */
 	il->scd_base_addr = il_rd_prph(il, IL49_SCD_SRAM_BASE_ADDR);
@@ -4958,7 +4922,7 @@ il4965_alive_notify(struct il_priv *il)
 		il4965_tx_queue_set_status(il, &il->txq[i], ac, 0);
 	}
 
-	spin_unlock_irqrestore(&il->lock, flags);
+	spin_unlock_bh(&il->lock);
 
 	return 0;
 }
@@ -5055,7 +5019,6 @@ static void il4965_cancel_deferred_work(struct il_priv *il);
 static void
 __il4965_down(struct il_priv *il)
 {
-	unsigned long flags;
 	int exit_pending;
 
 	D_INFO(DRV_NAME " is going down\n");
@@ -5071,7 +5034,7 @@ __il4965_down(struct il_priv *il)
 	il_clear_ucode_stations(il);
 
 	/* FIXME: race conditions ? */
-	spin_lock_irq(&il->sta_lock);
+	spin_lock_bh(&il->sta_lock);
 	/*
 	 * Remove all key information that is not stored as part
 	 * of station information since mac80211 may not have had
@@ -5081,7 +5044,7 @@ __il4965_down(struct il_priv *il)
 	 */
 	memset(il->_4965.wep_keys, 0, sizeof(il->_4965.wep_keys));
 	il->_4965.key_mapping_keys = 0;
-	spin_unlock_irq(&il->sta_lock);
+	spin_unlock_bh(&il->sta_lock);
 
 	il_dealloc_bcast_stations(il);
 	il_clear_driver_stations(il);
@@ -5098,10 +5061,8 @@ __il4965_down(struct il_priv *il)
 	_il_wr(il, CSR_RESET, CSR_RESET_REG_FLAG_NEVO_RESET);
 
 	/* tell the device to stop sending interrupts */
-	spin_lock_irqsave(&il->lock, flags);
 	il_disable_interrupts(il);
-	spin_unlock_irqrestore(&il->lock, flags);
-	il4965_synchronize_irq(il);
+	il_synchronize_irq(il);
 
 	if (il->mac80211_registered)
 		ieee80211_stop_queues(il->hw);
@@ -5771,7 +5732,7 @@ il4965_mac_channel_switch(struct ieee80211_hw *hw,
 		goto out;
 	}
 
-	spin_lock_irq(&il->lock);
+	spin_lock_bh(&il->lock);
 
 	il->current_ht_config.smps = conf->smps_mode;
 
@@ -5799,7 +5760,7 @@ il4965_mac_channel_switch(struct ieee80211_hw *hw,
 	il_set_rxon_ht(il, ht_conf);
 	il_set_flags_for_band(il, channel->band, il->vif);
 
-	spin_unlock_irq(&il->lock);
+	spin_unlock_bh(&il->lock);
 
 	il_set_rate(il);
 	/*
@@ -6168,7 +6129,6 @@ il4965_pci_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	struct il_priv *il;
 	struct ieee80211_hw *hw;
 	struct il_cfg *cfg = (struct il_cfg *)(ent->driver_data);
-	unsigned long flags;
 	u16 pci_cmd;
 
 	/************************
@@ -6246,6 +6206,7 @@ il4965_pci_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	 */
 	spin_lock_init(&il->reg_lock);
 	spin_lock_init(&il->lock);
+	spin_lock_init(&il->irq_lock);
 
 	/*
 	 * stop and reset the on-board processor just in case it is in a
@@ -6304,9 +6265,9 @@ il4965_pci_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	/********************
 	 * 7. Setup services
 	 ********************/
-	spin_lock_irqsave(&il->lock, flags);
+	spin_lock_bh(&il->lock);
 	il_disable_interrupts(il);
-	spin_unlock_irqrestore(&il->lock, flags);
+	spin_unlock_bh(&il->lock);
 
 	pci_enable_msi(il->pci_dev);
 
@@ -6376,7 +6337,6 @@ static void
 il4965_pci_remove(struct pci_dev *pdev)
 {
 	struct il_priv *il = pci_get_drvdata(pdev);
-	unsigned long flags;
 
 	if (!il)
 		return;
@@ -6415,11 +6375,8 @@ il4965_pci_remove(struct pci_dev *pdev)
 	/* make sure we flush any pending irq or
 	 * tasklet for the driver
 	 */
-	spin_lock_irqsave(&il->lock, flags);
 	il_disable_interrupts(il);
-	spin_unlock_irqrestore(&il->lock, flags);
-
-	il4965_synchronize_irq(il);
+	il_synchronize_irq(il);
 
 	il4965_dealloc_ucode_pci(il);
 

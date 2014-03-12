@@ -506,10 +506,9 @@ iw4965_is_ht40_channel(__le32 rxon_flags)
 void
 il4965_nic_config(struct il_priv *il)
 {
-	unsigned long flags;
 	u16 radio_cfg;
 
-	spin_lock_irqsave(&il->lock, flags);
+	spin_lock_bh(&il->lock);
 
 	radio_cfg = il_eeprom_query16(il, EEPROM_RADIO_CONFIG);
 
@@ -529,7 +528,7 @@ il4965_nic_config(struct il_priv *il)
 	    (struct il_eeprom_calib_info *)
 	    il_eeprom_query_addr(il, EEPROM_4965_CALIB_TXPOWER_OFFSET);
 
-	spin_unlock_irqrestore(&il->lock, flags);
+	spin_unlock_bh(&il->lock);
 }
 
 /* Reset differential Rx gains in NIC to prepare for chain noise calibration.

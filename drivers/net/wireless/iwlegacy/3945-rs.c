@@ -151,7 +151,6 @@ il3945_rate_scale_flush_wins(struct il3945_rs_sta *rs_sta)
 {
 	int unflushed = 0;
 	int i;
-	unsigned long flags;
 	struct il_priv *il __maybe_unused = rs_sta->il;
 
 	/*
@@ -163,14 +162,14 @@ il3945_rate_scale_flush_wins(struct il3945_rs_sta *rs_sta)
 		if (!rs_sta->win[i].counter)
 			continue;
 
-		spin_lock_irqsave(&rs_sta->lock, flags);
+		spin_lock_bh(&rs_sta->lock);
 		if (time_after(jiffies, rs_sta->win[i].stamp + RATE_WIN_FLUSH)) {
 			D_RATE("flushing %d samples of rate " "idx %d\n",
 			       rs_sta->win[i].counter, i);
 			il3945_clear_win(&rs_sta->win[i]);
 		} else
 			unflushed++;
-		spin_unlock_irqrestore(&rs_sta->lock, flags);
+		spin_unlock_bh(&rs_sta->lock);
 	}
 
 	return unflushed;
@@ -186,14 +185,13 @@ il3945_bg_rate_scale_flush(unsigned long data)
 	struct il3945_rs_sta *rs_sta = (void *)data;
 	struct il_priv *il __maybe_unused = rs_sta->il;
 	int unflushed = 0;
-	unsigned long flags;
 	u32 packet_count, duration, pps;
 
 	D_RATE("enter\n");
 
 	unflushed = il3945_rate_scale_flush_wins(rs_sta);
 
-	spin_lock_irqsave(&rs_sta->lock, flags);
+	spin_lock_bh(&rs_sta->lock);
 
 	/* Number of packets Rx'd since last time this timer ran */
 	packet_count = (rs_sta->tx_packets - rs_sta->last_tx_packets) + 1;
@@ -239,7 +237,7 @@ il3945_bg_rate_scale_flush(unsigned long data)
 
 	rs_sta->last_flush = jiffies;
 
-	spin_unlock_irqrestore(&rs_sta->lock, flags);
+	spin_unlock_bh(&rs_sta->lock);
 
 	D_RATE("leave\n");
 }
@@ -256,7 +254,6 @@ il3945_collect_tx_data(struct il3945_rs_sta *rs_sta,
 		       struct il3945_rate_scale_data *win, int success,
 		       int retries, int idx)
 {
-	unsigned long flags;
 	s32 fail_count;
 	struct il_priv *il __maybe_unused = rs_sta->il;
 
@@ -265,7 +262,7 @@ il3945_collect_tx_data(struct il3945_rs_sta *rs_sta,
 		return;
 	}
 
-	spin_lock_irqsave(&rs_sta->lock, flags);
+	spin_lock_bh(&rs_sta->lock);
 
 	/*
 	 * Keep track of only the latest 62 tx frame attempts in this rate's
@@ -324,7 +321,7 @@ il3945_collect_tx_data(struct il3945_rs_sta *rs_sta,
 	/* Tag this win as having been updated */
 	win->stamp = jiffies;
 
-	spin_unlock_irqrestore(&rs_sta->lock, flags);
+	spin_unlock_bh(&rs_sta->lock);
 }
 
 /*
@@ -448,7 +445,6 @@ il3945_rs_tx_status(void *il_rate, struct ieee80211_supported_band *sband,
 {
 	s8 retries = 0, current_count;
 	int scale_rate_idx, first_idx, last_idx;
-	unsigned long flags;
 	struct il_priv *il = (struct il_priv *)il_rate;
 	struct il3945_rs_sta *rs_sta = il_sta;
 	struct ieee80211_tx_info *info = IEEE80211_SKB_CB(skb);
@@ -523,7 +519,7 @@ il3945_rs_tx_status(void *il_rate, struct ieee80211_supported_band *sband,
 	/* We updated the rate scale win -- if its been more than
 	 * flush_time since the last run, schedule the flush
 	 * again */
-	spin_lock_irqsave(&rs_sta->lock, flags);
+	spin_lock_bh(&rs_sta->lock);
 
 	if (!rs_sta->flush_pending &&
 	    time_after(jiffies, rs_sta->last_flush + rs_sta->flush_time)) {
@@ -534,7 +530,7 @@ il3945_rs_tx_status(void *il_rate, struct ieee80211_supported_band *sband,
 			  jiffies + rs_sta->flush_time);
 	}
 
-	spin_unlock_irqrestore(&rs_sta->lock, flags);
+	spin_unlock_bh(&rs_sta->lock);
 
 	D_RATE("leave\n");
 }
@@ -636,7 +632,6 @@ il3945_rs_get_rate(void *il_r, struct ieee80211_sta *sta, void *il_sta,
 	int high_tpt = IL_INVALID_VALUE;
 	u32 fail_count;
 	s8 scale_action = 0;
-	unsigned long flags;
 	u16 rate_mask;
 	s8 max_rate_idx = -1;
 	struct il_priv *il __maybe_unused = (struct il_priv *)il_r;
@@ -667,7 +662,7 @@ il3945_rs_get_rate(void *il_r, struct ieee80211_sta *sta, void *il_sta,
 	if (sband->band == IEEE80211_BAND_5GHZ)
 		rate_mask = rate_mask << IL_FIRST_OFDM_RATE;
 
-	spin_lock_irqsave(&rs_sta->lock, flags);
+	spin_lock_bh(&rs_sta->lock);
 
 	/* for recent assoc, choose best rate regarding
 	 * to rssi value
@@ -691,7 +686,7 @@ il3945_rs_get_rate(void *il_r, struct ieee80211_sta *sta, void *il_sta,
 
 	if (fail_count < RATE_MIN_FAILURE_TH &&
 	    win->success_counter < RATE_MIN_SUCCESS_TH) {
-		spin_unlock_irqrestore(&rs_sta->lock, flags);
+		spin_unlock_bh(&rs_sta->lock);
 
 		D_RATE("Invalid average_tpt on rate %d: "
 		       "counter: %d, success_counter: %d, "
@@ -723,7 +718,7 @@ il3945_rs_get_rate(void *il_r, struct ieee80211_sta *sta, void *il_sta,
 	if (high != RATE_INVALID)
 		high_tpt = rs_sta->win[high].average_tpt;
 
-	spin_unlock_irqrestore(&rs_sta->lock, flags);
+	spin_unlock_bh(&rs_sta->lock);
 
 	scale_action = 0;
 
@@ -912,7 +907,6 @@ il3945_rate_scale_init(struct ieee80211_hw *hw, s32 sta_id)
 {
 	struct il_priv *il = hw->priv;
 	s32 rssi = 0;
-	unsigned long flags;
 	struct il3945_rs_sta *rs_sta;
 	struct ieee80211_sta *sta;
 	struct il3945_sta_priv *psta;
@@ -931,7 +925,7 @@ il3945_rate_scale_init(struct ieee80211_hw *hw, s32 sta_id)
 	psta = (void *)sta->drv_priv;
 	rs_sta = &psta->rs_sta;
 
-	spin_lock_irqsave(&rs_sta->lock, flags);
+	spin_lock_bh(&rs_sta->lock);
 
 	rs_sta->tgg = 0;
 	switch (il->band) {
@@ -951,7 +945,7 @@ il3945_rate_scale_init(struct ieee80211_hw *hw, s32 sta_id)
 		break;
 	}
 
-	spin_unlock_irqrestore(&rs_sta->lock, flags);
+	spin_unlock_bh(&rs_sta->lock);
 
 	rssi = il->_3945.last_rx_rssi;
 	if (rssi == 0)

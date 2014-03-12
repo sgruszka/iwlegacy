@@ -296,7 +296,7 @@ il3945_tx_queue_reclaim(struct il_priv *il, int txq_id, int idx)
 	     q->read_ptr = il_queue_inc_wrap(q->read_ptr, q->n_bd)) {
 
 		skb = txq->skbs[txq->q.read_ptr];
-		ieee80211_tx_status_irqsafe(il->hw, skb);
+		ieee80211_tx_status(il->hw, skb);
 		txq->skbs[txq->q.read_ptr] = NULL;
 		il->ops->txq_free_tfd(il, txq);
 	}
@@ -714,20 +714,19 @@ il3945_hw_build_tx_cmd_rate(struct il_priv *il, struct il_device_cmd *cmd,
 static u8
 il3945_sync_sta(struct il_priv *il, int sta_id, u16 tx_rate)
 {
-	unsigned long flags_spin;
 	struct il_station_entry *station;
 
 	if (sta_id == IL_INVALID_STATION)
 		return IL_INVALID_STATION;
 
-	spin_lock_irqsave(&il->sta_lock, flags_spin);
+	spin_lock_bh(&il->sta_lock);
 	station = &il->stations[sta_id];
 
 	station->sta.sta.modify_mask = STA_MODIFY_TX_RATE_MSK;
 	station->sta.rate_n_flags = cpu_to_le16(tx_rate);
 	station->sta.mode = STA_CONTROL_MODIFY_MSK;
 	il_send_add_sta(il, &station->sta, CMD_ASYNC);
-	spin_unlock_irqrestore(&il->sta_lock, flags_spin);
+	spin_unlock_bh(&il->sta_lock);
 
 	D_RATE("SCALE sync station %d to rate %d\n", sta_id, tx_rate);
 	return sta_id;
@@ -880,10 +879,9 @@ static void
 il3945_nic_config(struct il_priv *il)
 {
 	struct il3945_eeprom *eeprom = (struct il3945_eeprom *)il->eeprom;
-	unsigned long flags;
 	u8 rev_id = il->pci_dev->revision;
 
-	spin_lock_irqsave(&il->lock, flags);
+	spin_lock_bh(&il->lock);
 
 	/* Determine HW type */
 	D_INFO("HW Revision ID = 0x%X\n", rev_id);
@@ -928,7 +926,7 @@ il3945_nic_config(struct il_priv *il)
 		il_set_bit(il, CSR_HW_IF_CONFIG_REG,
 			   CSR39_HW_IF_CONFIG_REG_BITS_SILICON_TYPE_B);
 	}
-	spin_unlock_irqrestore(&il->lock, flags);
+	spin_unlock_bh(&il->lock);
 
 	if (eeprom->sku_cap & EEPROM_SKU_CAP_SW_RF_KILL_ENABLE)
 		D_RF_KILL("SW RF KILL supported in EEPROM.\n");
@@ -941,12 +939,11 @@ int
 il3945_hw_nic_init(struct il_priv *il)
 {
 	int rc;
-	unsigned long flags;
 	struct il_rx_queue *rxq = &il->rxq;
 
-	spin_lock_irqsave(&il->lock, flags);
+	spin_lock_bh(&il->lock);
 	il3945_apm_init(il);
-	spin_unlock_irqrestore(&il->lock, flags);
+	spin_unlock_bh(&il->lock);
 
 	il3945_set_pwr_vmain(il);
 	il3945_nic_config(il);
@@ -2243,7 +2240,6 @@ il3945_add_bssid_station(struct il_priv *il, const u8 * addr, u8 * sta_id_r)
 {
 	int ret;
 	u8 sta_id;
-	unsigned long flags;
 
 	if (sta_id_r)
 		*sta_id_r = IL_INVALID_STATION;
@@ -2257,9 +2253,9 @@ il3945_add_bssid_station(struct il_priv *il, const u8 * addr, u8 * sta_id_r)
 	if (sta_id_r)
 		*sta_id_r = sta_id;
 
-	spin_lock_irqsave(&il->sta_lock, flags);
+	spin_lock_bh(&il->sta_lock);
 	il->stations[sta_id].used |= IL_STA_LOCAL;
-	spin_unlock_irqrestore(&il->sta_lock, flags);
+	spin_unlock_bh(&il->sta_lock);
 
 	return 0;
 }
