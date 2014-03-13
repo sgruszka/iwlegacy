@@ -521,7 +521,7 @@ struct il_channel_info {
  * queue, 2 (unused) HCCA queues, and 4 HT queues (one for each AC) */
 #define IL_MIN_NUM_QUEUES	10
 
-#define IL_DEFAULT_CMD_QUEUE_NUM	4
+#define IL_CMD_QUEUE		4
 
 #define IEEE80211_DATA_LEN              2304
 #define IEEE80211_4ADDR_LEN             30
@@ -1186,9 +1186,6 @@ struct il_priv {
 	u32 hw_rev;
 	u32 hw_wa_rev;
 	u8 rev_id;
-
-	/* command queue number */
-	u8 cmd_queue;
 
 	/* max number of station keys */
 	u8 sta_key_max_num;

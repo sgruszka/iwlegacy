@@ -290,7 +290,7 @@ il3945_tx_queue_reclaim(struct il_priv *il, int txq_id, int idx)
 	struct il_queue *q = &txq->q;
 	struct sk_buff *skb;
 
-	BUG_ON(txq_id == IL39_CMD_QUEUE_NUM);
+	BUG_ON(txq_id == IL_CMD_QUEUE);
 
 	for (idx = il_queue_inc_wrap(idx, q->n_bd); q->read_ptr != idx;
 	     q->read_ptr = il_queue_inc_wrap(q->read_ptr, q->n_bd)) {
@@ -302,7 +302,7 @@ il3945_tx_queue_reclaim(struct il_priv *il, int txq_id, int idx)
 	}
 
 	if (il_queue_space(q) > q->low_mark && txq_id >= 0 &&
-	    txq_id != IL39_CMD_QUEUE_NUM && il->mac80211_registered)
+	    txq_id != IL_CMD_QUEUE && il->mac80211_registered)
 		il_wake_queue(il, txq);
 }
 
@@ -971,7 +971,7 @@ il3945_hw_txq_ctx_free(struct il_priv *il)
 	/* Tx queues */
 	if (il->txq)
 		for (txq_id = 0; txq_id < il->hw_params.max_txq_num; txq_id++)
-			if (txq_id == IL39_CMD_QUEUE_NUM)
+			if (txq_id == IL_CMD_QUEUE)
 				il_cmd_queue_free(il);
 			else
 				il_tx_queue_free(il, txq_id);

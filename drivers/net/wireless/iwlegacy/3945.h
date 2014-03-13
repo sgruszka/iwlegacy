@@ -421,7 +421,6 @@ struct il3945_eeprom {
 
 /* 4 DATA + 1 CMD. There are 2 HCCA queues that are not used. */
 #define IL39_NUM_QUEUES        5
-#define IL39_CMD_QUEUE_NUM	4
 
 #define IL_DEFAULT_TX_RETRY  15
 

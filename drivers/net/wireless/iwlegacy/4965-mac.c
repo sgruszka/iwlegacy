@@ -1723,7 +1723,7 @@ il4965_hw_txq_ctx_free(struct il_priv *il)
 	/* Tx queues */
 	if (il->txq) {
 		for (txq_id = 0; txq_id < il->hw_params.max_txq_num; txq_id++)
-			if (txq_id == il->cmd_queue)
+			if (txq_id == IL_CMD_QUEUE)
 				il_cmd_queue_free(il);
 			else
 				il_tx_queue_free(il, txq_id);
@@ -1829,7 +1829,7 @@ il4965_txq_ctx_unmap(struct il_priv *il)
 
 	/* Unmap DMA from host system and free skb's */
 	for (txq_id = 0; txq_id < il->hw_params.max_txq_num; txq_id++)
-		if (txq_id == il->cmd_queue)
+		if (txq_id == IL_CMD_QUEUE)
 			il_cmd_queue_unmap(il);
 		else
 			il_tx_queue_unmap(il, txq_id);
@@ -4892,7 +4892,7 @@ il4965_alive_notify(struct il_priv *il)
 	/* Activate all Tx DMA/FIFO channels */
 	il4965_txq_set_sched(il, IL_MASK(0, 6));
 
-	il4965_set_wr_ptrs(il, IL_DEFAULT_CMD_QUEUE_NUM, 0);
+	il4965_set_wr_ptrs(il, IL_CMD_QUEUE, 0);
 
 	/* make sure all queue are not stopped */
 	memset(&il->queue_stopped[0], 0, sizeof(il->queue_stopped));
@@ -5206,9 +5206,6 @@ __il4965_up(struct il_priv *il)
 	}
 
 	_il_wr(il, CSR_INT, 0xFFFFFFFF);
-
-	/* must be initialised before il_hw_nic_init */
-	il->cmd_queue = IL_DEFAULT_CMD_QUEUE_NUM;
 
 	ret = il4965_hw_nic_init(il);
 	if (ret) {

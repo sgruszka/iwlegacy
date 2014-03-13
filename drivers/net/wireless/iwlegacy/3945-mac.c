@@ -3237,8 +3237,6 @@ il3945_pci_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	il->hw = hw;
 	SET_IEEE80211_DEV(hw, &pdev->dev);
 
-	il->cmd_queue = IL39_CMD_QUEUE_NUM;
-
 	/*
 	 * Disabling hardware scan means that mac80211 will perform scans
 	 * "the hard way", rather than using device's scan.

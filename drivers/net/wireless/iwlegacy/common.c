@@ -2862,7 +2862,7 @@ EXPORT_SYMBOL(il_tx_queue_free);
 void
 il_cmd_queue_unmap(struct il_priv *il)
 {
-	struct il_tx_queue *txq = &il->txq[il->cmd_queue];
+	struct il_tx_queue *txq = &il->txq[IL_CMD_QUEUE];
 	struct il_queue *q = &txq->q;
 	int i;
 
@@ -2905,7 +2905,7 @@ EXPORT_SYMBOL(il_cmd_queue_unmap);
 void
 il_cmd_queue_free(struct il_priv *il)
 {
-	struct il_tx_queue *txq = &il->txq[il->cmd_queue];
+	struct il_tx_queue *txq = &il->txq[IL_CMD_QUEUE];
 	struct device *dev = &il->pci_dev->dev;
 	int i;
 
@@ -3018,7 +3018,7 @@ il_tx_queue_alloc(struct il_priv *il, struct il_tx_queue *txq, u32 id)
 
 	/* Driver ilate data, only for Tx (not command) queues,
 	 * not shared with device. */
-	if (id != il->cmd_queue) {
+	if (id != IL_CMD_QUEUE) {
 		txq->skbs = kcalloc(TFD_QUEUE_SIZE_MAX, sizeof(struct skb *),
 				    GFP_KERNEL);
 		if (!txq->skbs) {
@@ -3062,7 +3062,7 @@ il_tx_queue_init(struct il_priv *il, u32 txq_id)
 	 * For normal Tx queues (all other queues), no super-size command
 	 * space is needed.
 	 */
-	if (txq_id == il->cmd_queue) {
+	if (txq_id == IL_CMD_QUEUE) {
 		slots = TFD_CMD_SLOTS;
 		actual_slots = slots + 1;
 		txq->meta = kzalloc(sizeof(struct il_cmd_meta) * actual_slots,
@@ -3129,7 +3129,7 @@ il_tx_queue_reset(struct il_priv *il, u32 txq_id)
 	int slots, actual_slots;
 	struct il_tx_queue *txq = &il->txq[txq_id];
 
-	if (txq_id == il->cmd_queue) {
+	if (txq_id == IL_CMD_QUEUE) {
 		slots = TFD_CMD_SLOTS;
 		actual_slots = TFD_CMD_SLOTS + 1;
 		memset(txq->meta, 0, sizeof(struct il_cmd_meta) * actual_slots);
@@ -3162,7 +3162,7 @@ EXPORT_SYMBOL(il_tx_queue_reset);
 struct il_cmd_meta *
 il_enqueue_hcmd(struct il_priv *il, struct il_host_cmd *hcmd)
 {
-	struct il_tx_queue *txq = &il->txq[il->cmd_queue];
+	struct il_tx_queue *txq = &il->txq[IL_CMD_QUEUE];
 	struct il_queue *q = &txq->q;
 	struct il_device_cmd *dcmd;
 	struct il_cmd_meta *meta;
@@ -3209,7 +3209,7 @@ il_enqueue_hcmd(struct il_priv *il, struct il_host_cmd *hcmd)
 	memcpy(&dcmd->cmd.payload, hcmd->data, hcmd->len);
 	dcmd->hdr.flags = 0;
 	dcmd->hdr.sequence =
-	    cpu_to_le16(QUEUE_TO_SEQ(il->cmd_queue) | IDX_TO_SEQ(q->write_ptr));
+	    cpu_to_le16(QUEUE_TO_SEQ(IL_CMD_QUEUE) | IDX_TO_SEQ(q->write_ptr));
 	if (hcmd->flags & CMD_SIZE_HUGE)
 		dcmd->hdr.sequence |= SEQ_HUGE_FRAME;
 
@@ -3233,7 +3233,7 @@ il_enqueue_hcmd(struct il_priv *il, struct il_host_cmd *hcmd)
 	D_HC("Sending command %s (#%x), seq: 0x%04X, %d bytes at %d[%d]:%d\n",
 	     il_get_cmd_string(dcmd->hdr.cmd), dcmd->hdr.cmd,
 	     le16_to_cpu(dcmd->hdr.sequence), dev_size, q->write_ptr,
-	     idx, il->cmd_queue);
+	     idx, IL_CMD_QUEUE);
 
 	/* Increment and update queue's write idx. */
 	txq->need_update = 1;
@@ -3253,7 +3253,7 @@ il_cmd_queue_reclaim(struct il_priv *il, struct il_tx_queue *txq, int idx)
 
 	if (idx >= q->n_bd || il_queue_used(q, idx) == 0) {
 		IL_ERR("Read idx for command queue txq id (%d), idx %d, "
-		       "is out of range [0-%d] %d %d.\n", il->cmd_queue, idx,
+		       "is out of range [0-%d] %d %d.\n", IL_CMD_QUEUE, idx,
 		       q->n_bd, q->write_ptr, q->read_ptr);
 		return;
 	}
@@ -3288,9 +3288,9 @@ il_tx_cmd_complete(struct il_priv *il, struct il_rx_pkt *pkt)
 	bool huge = !!(pkt->hdr.sequence & SEQ_HUGE_FRAME);
 	struct il_device_cmd *dcmd;
 	struct il_cmd_meta *meta;
-	struct il_tx_queue *txq = &il->txq[il->cmd_queue];
+	struct il_tx_queue *txq = &il->txq[IL_CMD_QUEUE];
 
-	if (WARN_ON_ONCE(txq_id != il->cmd_queue)) {
+	if (WARN_ON_ONCE(txq_id != IL_CMD_QUEUE)) {
 		il_print_hex_error(il, pkt, 32);
 		return;
 	}
@@ -4751,7 +4751,7 @@ void il_mac_flush(struct ieee80211_hw *hw, u32 queues, bool drop)
 	for (i = 0; i < il->hw_params.max_txq_num; i++) {
 		struct il_queue *q;
 
-		if (i == il->cmd_queue)
+		if (i == IL_CMD_QUEUE)
 			continue;
 
 		q = &il->txq[i].q;
@@ -4828,13 +4828,13 @@ il_bg_watchdog(unsigned long data)
 		return;
 
 	/* monitor and check for stuck cmd queue */
-	if (il_check_stuck_queue(il, il->cmd_queue))
+	if (il_check_stuck_queue(il, IL_CMD_QUEUE))
 		return;
 
 	/* monitor and check for other stuck queues */
 	for (cnt = 0; cnt < il->hw_params.max_txq_num; cnt++) {
 		/* skip as we already checked the command queue */
-		if (cnt == il->cmd_queue)
+		if (cnt == IL_CMD_QUEUE)
 			continue;
 		if (il_check_stuck_queue(il, cnt))
 			return;
