@@ -1429,7 +1429,6 @@ il4965_tx_skb(struct il_priv *il,
 	struct il_tx_queue *txq;
 	struct il_queue *q;
 	struct il_device_cmd *out_cmd;
-	struct il_cmd_meta *out_meta;
 	struct il_tx_cmd *tx_cmd;
 	int txq_id;
 	dma_addr_t phys_addr;
@@ -1547,7 +1546,6 @@ il4965_tx_skb(struct il_priv *il,
 
 	/* Set up first empty entry in queue's array of Tx/cmd buffers */
 	out_cmd = txq->cmd[q->write_ptr];
-	out_meta = &txq->meta[q->write_ptr];
 	tx_cmd = &out_cmd->cmd.tx;
 	memset(&out_cmd->hdr, 0, sizeof(out_cmd->hdr));
 	memset(tx_cmd, 0, sizeof(struct il_tx_cmd));
@@ -1615,8 +1613,6 @@ il4965_tx_skb(struct il_priv *il,
 	/* Add buffer containing Tx command and MAC(!) header to TFD's
 	 * first entry */
 	il->ops->txq_attach_buf_to_tfd(il, txq, txcmd_phys, firstlen, 1, 0);
-	dma_unmap_addr_set(out_meta, mapping, txcmd_phys);
-	dma_unmap_len_set(out_meta, len, firstlen);
 	if (secondlen)
 		il->ops->txq_attach_buf_to_tfd(il, txq, phys_addr, secondlen,
 					       0, 0);
@@ -3640,13 +3636,12 @@ static inline dma_addr_t
 il4965_tfd_tb_get_addr(struct il_tfd *tfd, u8 idx)
 {
 	struct il_tfd_tb *tb = &tfd->tbs[idx];
-
 	dma_addr_t addr = get_unaligned_le32(&tb->lo);
-	if (sizeof(dma_addr_t) > sizeof(u32))
-		addr |=
-		    ((dma_addr_t) (le16_to_cpu(tb->hi_n_len) & 0xF) << 16) <<
-		    16;
 
+	if (sizeof(dma_addr_t) == sizeof(u32))
+		return addr;
+
+	addr |= ((dma_addr_t)(le16_to_cpu(tb->hi_n_len) & 0xf) << 16) << 16;
 	return addr;
 }
 
@@ -3666,7 +3661,7 @@ il4965_tfd_set_tb(struct il_tfd *tfd, u8 idx, dma_addr_t addr, u16 len)
 
 	put_unaligned_le32(addr, &tb->lo);
 	if (sizeof(dma_addr_t) > sizeof(u32))
-		hi_n_len |= ((addr >> 16) >> 16) & 0xF;
+		hi_n_len |= ((addr >> 16) >> 16) & 0xf;
 
 	tb->hi_n_len = cpu_to_le16(hi_n_len);
 
@@ -3681,7 +3676,7 @@ il4965_tfd_get_num_tbs(struct il_tfd *tfd)
 
 /**
  * il4965_hw_txq_free_tfd - Free all chunks referenced by TFD [txq->q.read_ptr]
- * @il - driver ilate data
+ * @il - driver data
  * @txq - tx queue
  *
  * Does NOT advance any TFD circular buffer read/write idxes
@@ -3691,42 +3686,27 @@ void
 il4965_hw_txq_free_tfd(struct il_priv *il, struct il_tx_queue *txq)
 {
 	struct il_tfd *tfd_tmp = (struct il_tfd *)txq->tfds;
-	struct il_tfd *tfd;
+	struct il_tfd *tfd = &tfd_tmp[txq->q.read_ptr];
 	struct pci_dev *dev = il->pci_dev;
-	int idx = txq->q.read_ptr;
-	int i;
-	int num_tbs;
+	int i, num_tbs;
 
-	tfd = &tfd_tmp[idx];
-
-	/* Sanity check on number of chunks */
 	num_tbs = il4965_tfd_get_num_tbs(tfd);
 
-	if (num_tbs >= IL_NUM_OF_TBS) {
-		IL_ERR("Too many chunks: %i\n", num_tbs);
-		/* @todo issue fatal error, it is quite serious situation */
+	if (WARN_ON_ONCE(num_tbs >= IL_NUM_OF_TBS))
 		return;
-	}
 
-	/* Unmap tx_cmd */
-	if (num_tbs)
-		pci_unmap_single(dev, dma_unmap_addr(&txq->meta[idx], mapping),
-				 dma_unmap_len(&txq->meta[idx], len),
-				 PCI_DMA_BIDIRECTIONAL);
-
-	/* Unmap chunks, if any. */
-	for (i = 1; i < num_tbs; i++)
-		pci_unmap_single(dev, il4965_tfd_tb_get_addr(tfd, i),
+	/* Unmap chunks. */
+	for (i = 0; i < num_tbs; i++)
+		pci_unmap_single(dev,
+				 il4965_tfd_tb_get_addr(tfd, i),
 				 il4965_tfd_tb_get_len(tfd, i),
 				 PCI_DMA_TODEVICE);
 
-	/* free SKB */
 	if (txq->skbs) {
 		struct sk_buff *skb = txq->skbs[txq->q.read_ptr];
 
-		/* can be called from irqs-disabled context */
 		if (skb) {
-			dev_kfree_skb_any(skb);
+			dev_kfree_skb(skb);
 			txq->skbs[txq->q.read_ptr] = NULL;
 		}
 	}

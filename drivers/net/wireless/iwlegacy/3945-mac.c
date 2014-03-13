@@ -468,7 +468,6 @@ il3945_tx_skb(struct il_priv *il,
 	struct il_tx_queue *txq = NULL;
 	struct il_queue *q = NULL;
 	struct il_device_cmd *out_cmd;
-	struct il_cmd_meta *out_meta;
 	dma_addr_t phys_addr;
 	dma_addr_t txcmd_phys;
 	int txq_id = skb_get_queue_mapping(skb);
@@ -543,7 +542,6 @@ il3945_tx_skb(struct il_priv *il,
 
 	/* Init first empty entry in queue's array of Tx/cmd buffers */
 	out_cmd = txq->cmd[idx];
-	out_meta = &txq->meta[idx];
 	tx_cmd = (struct il3945_tx_cmd *)out_cmd->cmd.payload;
 	memset(&out_cmd->hdr, 0, sizeof(out_cmd->hdr));
 	memset(tx_cmd, 0, sizeof(*tx_cmd));
@@ -612,8 +610,6 @@ il3945_tx_skb(struct il_priv *il,
 	/* Add buffer containing Tx command and MAC(!) header to TFD's
 	 * first entry */
 	il->ops->txq_attach_buf_to_tfd(il, txq, txcmd_phys, firstlen, 1, 0);
-	dma_unmap_addr_set(out_meta, mapping, txcmd_phys);
-	dma_unmap_len_set(out_meta, len, firstlen);
 	if (secondlen > 0)
 		il->ops->txq_attach_buf_to_tfd(il, txq, phys_addr, secondlen, 0,
 					       U32_PAD(secondlen));

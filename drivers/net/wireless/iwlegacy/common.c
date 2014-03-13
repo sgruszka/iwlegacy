@@ -3052,12 +3052,10 @@ error:
 int
 il_tx_queue_init(struct il_priv *il, u32 txq_id)
 {
-	int i, len, ret;
-	int slots, actual_slots;
 	struct il_tx_queue *txq = &il->txq[txq_id];
+	int i, len, ret, slots, actual_slots;
 
-	/*
-	 * Alloc buffer array for commands (Tx or other types of commands).
+	/* Alloc buffer array for commands (Tx or other types of commands).
 	 * For the command queue (#4/#9), allocate command space + one big
 	 * command for scan, since scan command is very huge; the system will
 	 * not have two scans at the same time, so only one is needed.
@@ -3067,17 +3065,18 @@ il_tx_queue_init(struct il_priv *il, u32 txq_id)
 	if (txq_id == il->cmd_queue) {
 		slots = TFD_CMD_SLOTS;
 		actual_slots = slots + 1;
+		txq->meta = kzalloc(sizeof(struct il_cmd_meta) * actual_slots,
+				    GFP_KERNEL);
+		if (!txq->meta)
+			goto out_free_arrays;
 	} else {
 		slots = TFD_TX_CMD_SLOTS;
 		actual_slots = slots;
 	}
 
-	txq->meta =
-	    kzalloc(sizeof(struct il_cmd_meta) * actual_slots, GFP_KERNEL);
-	txq->cmd =
-	    kzalloc(sizeof(struct il_device_cmd *) * actual_slots, GFP_KERNEL);
-
-	if (!txq->meta || !txq->cmd)
+	txq->cmd = kzalloc(sizeof(struct il_device_cmd *) * actual_slots,
+			   GFP_KERNEL);
+	if (!txq->cmd)
 		goto out_free_arrays;
 
 	len = sizeof(struct il_device_cmd);
@@ -3133,12 +3132,12 @@ il_tx_queue_reset(struct il_priv *il, u32 txq_id)
 	if (txq_id == il->cmd_queue) {
 		slots = TFD_CMD_SLOTS;
 		actual_slots = TFD_CMD_SLOTS + 1;
+		memset(txq->meta, 0, sizeof(struct il_cmd_meta) * actual_slots);
 	} else {
 		slots = TFD_TX_CMD_SLOTS;
 		actual_slots = TFD_TX_CMD_SLOTS;
 	}
 
-	memset(txq->meta, 0, sizeof(struct il_cmd_meta) * actual_slots);
 	txq->need_update = 0;
 
 	/* Initialize queue's high/low-water marks, and head/tail idxes */
