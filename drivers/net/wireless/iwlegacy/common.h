@@ -72,23 +72,6 @@ struct il_tx_queue;
  *   averages within an s8's (used in some apps) range of negative values. */
 #define IL_NOISE_MEAS_NOT_AVAILABLE (-127)
 
-/*
- * RTS threshold here is total size [2347] minus 4 FCS bytes
- * Per spec:
- *   a value of 0 means RTS on all data/management packets
- *   a value > max MSDU size means no RTS
- * else RTS for data/management frames where MPDU is larger
- *   than RTS value.
- */
-#define DEFAULT_RTS_THRESHOLD     2347U
-#define MIN_RTS_THRESHOLD         0U
-#define MAX_RTS_THRESHOLD         2347U
-#define MAX_MSDU_SIZE		  2304U
-#define MAX_MPDU_SIZE		  2346U
-#define DEFAULT_BEACON_INTERVAL   100U
-#define	DEFAULT_SHORT_RETRY_LIMIT 7U
-#define	DEFAULT_LONG_RETRY_LIMIT  4U
-
 struct il_rx_buf {
 	dma_addr_t page_dma;
 	struct page *page;

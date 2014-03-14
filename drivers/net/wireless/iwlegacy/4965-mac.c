@@ -3568,8 +3568,6 @@ il4965_hw_get_beacon_cmd(struct il_priv *il, struct il_frame *frame)
 	frame_size =
 	    il4965_fill_beacon_frame(il, tx_beacon_cmd->frame,
 				     sizeof(frame->u) - sizeof(*tx_beacon_cmd));
-	if (WARN_ON_ONCE(frame_size > MAX_MPDU_SIZE))
-		return 0;
 	if (!frame_size)
 		return 0;
 

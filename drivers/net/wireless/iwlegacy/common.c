@@ -3538,6 +3538,7 @@ EXPORT_SYMBOL(il_is_ht40_tx_allowed);
 static u16
 il_adjust_beacon_interval(u16 beacon_val, u16 max_beacon_val)
 {
+	const unsigned DEFAULT_BEACON_INTERVAL = 100;
 	u16 new_val;
 	u16 beacon_factor;
 

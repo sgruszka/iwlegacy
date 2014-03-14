@@ -2393,7 +2393,6 @@ il3945_hw_get_beacon_cmd(struct il_priv *il, struct il3945_frame *frame,
 	    il3945_fill_beacon_frame(il, tx_beacon_cmd->frame,
 				     sizeof(frame->u) - sizeof(*tx_beacon_cmd));
 
-	BUG_ON(frame_size > MAX_MPDU_SIZE);
 	tx_beacon_cmd->tx.len = cpu_to_le16((u16) frame_size);
 
 	tx_beacon_cmd->tx.rate = rate;
