@@ -2918,21 +2918,16 @@ EXPORT_SYMBOL(il_tx_queue_free);
 int
 il_queue_space(const struct il_queue *q)
 {
-	int s = q->read_ptr - q->write_ptr;
+	unsigned int used;
 
-	if (q->read_ptr > q->write_ptr)
-		s -= TFD_QUEUE_SIZE_MAX;
+	used = (q->write_ptr - q->read_ptr) & (TFD_QUEUE_SIZE_MAX - 1);
 
-	if (s <= 0)
-		s += q->n_win;
-	/* keep some reserve to not confuse empty and full situations */
-	s -= 2;
-	if (s < 0)
-		s = 0;
-	return s;
+	if (WARN_ON(used > q->n_win))
+		return 0;
+
+	return q->n_win - used;
 }
 EXPORT_SYMBOL(il_queue_space);
-
 
 /**
  * il_queue_init - Initialize queue's high/low-water and read/write idxes
