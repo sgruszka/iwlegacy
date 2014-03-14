@@ -1434,7 +1434,7 @@ il4965_tx_skb(struct il_priv *il,
 	dma_addr_t phys_addr;
 	dma_addr_t txcmd_phys;
 	dma_addr_t scratch_phys;
-	u16 len, firstlen, secondlen;
+	u16 idx, len, firstlen, secondlen;
 	u16 seq_number = 0;
 	__le16 fc;
 	u8 hdr_len;
@@ -1545,7 +1545,8 @@ il4965_tx_skb(struct il_priv *il,
 	txq->skbs[q->write_ptr] = skb;
 
 	/* Set up first empty entry in queue's array of Tx/cmd buffers */
-	out_cmd = txq->cmd[q->write_ptr];
+	idx = il_get_cmd_idx(q, q->write_ptr, 0);
+	out_cmd = txq->cmd[idx];
 	tx_cmd = &out_cmd->cmd.tx;
 	memset(&out_cmd->hdr, 0, sizeof(out_cmd->hdr));
 	memset(tx_cmd, 0, sizeof(struct il_tx_cmd));
