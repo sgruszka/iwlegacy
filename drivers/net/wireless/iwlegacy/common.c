@@ -3190,28 +3190,6 @@ il_enqueue_hcmd(struct il_priv *il, struct il_host_cmd *hcmd)
 	return meta;
 }
 
-static void
-il_cmd_queue_reclaim(struct il_priv *il, struct il_tx_queue *txq, int idx)
-{
-	struct il_queue *q = &txq->q;
-	int nfreed, end;
-
-	if (IL_WARN_OUT_OF_RANGE(il, txq, idx))
-		return;
-
-	end = il_txq_inc(idx);
-	nfreed = 0;
-
-	while (q->read_ptr != idx) {
-		if (nfreed++ > 0) {
-			IL_ERR("HCMD skipped: idx (%d) %d %d\n",
-			       idx, q->write_ptr, q->read_ptr);
-			queue_work(il->workqueue, &il->restart);
-		}
-		q->read_ptr = il_txq_inc(q->read_ptr);
-	}
-}
-
 /**
  * il_tx_cmd_complete - Pull unused buffers off the queue and reclaim them
  * @rxb: Rx buffer to reclaim
@@ -3231,11 +3209,15 @@ il_tx_cmd_complete(struct il_priv *il, struct il_rx_pkt *pkt)
 	struct il_device_cmd *dcmd;
 	struct il_cmd_meta *meta;
 	struct il_tx_queue *txq = &il->txq[IL_CMD_QUEUE];
+	struct il_queue *q = &txq->q;
 
 	if (WARN_ON_ONCE(txq_id != IL_CMD_QUEUE)) {
 		il_print_hex_error(il, pkt, 32);
 		return;
 	}
+
+	if (IL_WARN_OUT_OF_RANGE(il, txq, idx))
+		return;
 
 	cmd_idx = il_get_cmd_idx(&txq->q, idx, huge);
 	dcmd = txq->cmd[cmd_idx];
@@ -3254,8 +3236,6 @@ il_tx_cmd_complete(struct il_priv *il, struct il_rx_pkt *pkt)
 	if (meta->flags & CMD_COPY_PKT)
 		memcpy(meta->hcmd->pkt_ptr, pkt, sizeof(*pkt));
 
-	il_cmd_queue_reclaim(il, txq, idx);
-
 	if (!(meta->flags & CMD_ASYNC)) {
 		clear_bit(S_HCMD_ACTIVE, &il->status);
 		D_INFO("Clearing HCMD_ACTIVE for command %s\n",
@@ -3263,8 +3243,16 @@ il_tx_cmd_complete(struct il_priv *il, struct il_rx_pkt *pkt)
 		wake_up(&il->wait_command_queue);
 	}
 
-	/* Mark as unmapped */
+	/* Mark as unmapped. */
 	meta->flags = 0;
+
+	q->read_ptr = il_txq_inc(q->read_ptr);
+
+	/* We expect firmware will process commands in the same order
+	 * we pass them to it.
+	 */
+	if (WARN_ON_ONCE(q->read_ptr != il_txq_inc(idx)))
+		queue_work(il->workqueue, &il->restart);
 
 	spin_unlock_bh(&il->hcmd_lock);
 }
