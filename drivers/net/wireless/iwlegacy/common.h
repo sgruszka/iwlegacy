@@ -47,15 +47,12 @@ struct il_tx_queue;
 #define IL_WARN(f, a...) dev_warn(&il->pci_dev->dev, f, ## a)
 #define IL_INFO(f, a...) dev_info(&il->pci_dev->dev, f, ## a)
 
-#define RX_QUEUE_SIZE                         256
-#define RX_QUEUE_MASK                         255
-#define RX_QUEUE_SIZE_LOG                     8
-
 /*
  * RX related structures and functions
  */
-#define RX_FREE_BUFFERS 64
-#define RX_LOW_WATERMARK 8
+#define RX_QUEUE_SIZE                         256
+#define RX_QUEUE_MASK                         255
+#define RX_QUEUE_SIZE_LOG                     8
 
 #define U32_PAD(n)		((4-(n))&0x3)
 
@@ -95,10 +92,10 @@ struct il_tx_queue;
 struct il_rx_buf {
 	dma_addr_t page_dma;
 	struct page *page;
-	struct list_head list;
 };
 
 #define rxb_addr(r) page_address(r->page)
+#define IL_RX_PG_SIZE(_il) (PAGE_SIZE << (_il)->hw_params.rx_page_order)
 
 /* defined below */
 struct il_device_cmd;
@@ -594,9 +591,6 @@ struct il_host_cmd {
  * @bd_dma: bus address of buffer of receive buffer descriptors (rbd)
  * @read: Shared idx to newest available Rx buffer
  * @write: Shared idx to oldest written Rx packet
- * @free_count: Number of pre-allocated buffers in rx_free
- * @rx_free: list of free SKBs for use
- * @rx_used: List of Rx buffers with no SKB
  * @need_update: flag to indicate we need to update read/write idx
  * @rb_stts: driver's pointer to receive buffer status
  * @rb_stts_dma: bus address of receive buffer status
@@ -606,14 +600,10 @@ struct il_host_cmd {
 struct il_rx_queue {
 	__le32 *bd;
 	dma_addr_t bd_dma;
-	struct il_rx_buf pool[RX_QUEUE_SIZE + RX_FREE_BUFFERS];
-	struct il_rx_buf *queue[RX_QUEUE_SIZE];
+	struct il_rx_buf queue[RX_QUEUE_SIZE];
 	u32 read;
 	u32 write;
-	u32 free_count;
 	u32 write_actual;
-	struct list_head rx_free;
-	struct list_head rx_used;
 	int need_update;
 	struct il_rb_status *rb_stts;
 	dma_addr_t rb_stts_dma;
@@ -1142,7 +1132,6 @@ struct il_priv {
 	int frames_count;
 
 	enum ieee80211_band band;
-	int alloc_rxb_page;
 
 	void (*handlers[IL_CN_MAX]) (struct il_priv *il,
 				     struct il_rx_pkt *pkt);
@@ -1389,7 +1378,6 @@ struct il_priv {
 
 	struct work_struct restart;
 	struct work_struct scan_completed;
-	struct work_struct rx_replenish;
 	struct work_struct abort_scan;
 
 	bool beacon_enabled;
@@ -1492,20 +1480,6 @@ static inline int
 il_is_channel_ibss(const struct il_channel_info *ch)
 {
 	return (ch->flags & EEPROM_CHANNEL_IBSS) ? 1 : 0;
-}
-
-static inline void
-__il_free_pages(struct il_priv *il, struct page *page)
-{
-	__free_pages(page, il->hw_params.rx_page_order);
-	il->alloc_rxb_page--;
-}
-
-static inline void
-il_free_pages(struct il_priv *il, unsigned long page)
-{
-	free_pages(page, il->hw_params.rx_page_order);
-	il->alloc_rxb_page--;
 }
 
 #define IWLWIFI_VERSION "in-tree:"
@@ -1750,8 +1724,13 @@ void il_hdl_csa(struct il_priv *il, struct il_rx_pkt *pkt);
 void il_cmd_queue_unmap(struct il_priv *il);
 void il_cmd_queue_free(struct il_priv *il);
 int il_rx_queue_alloc(struct il_priv *il);
+void il_rx_queue_free(struct il_priv *il);
 void il_rx_queue_update_write_ptr(struct il_priv *il, struct il_rx_queue *q);
+void il_rx_queue_reset(struct il_priv *il);
 int il_rx_queue_space(const struct il_rx_queue *q);
+void il_pass_packet_to_mac80211(struct il_priv *il, struct il_rx_buf *rxb,
+				struct ieee80211_hdr *hdr, unsigned len,
+				struct ieee80211_rx_status *stats);
 void il_tx_cmd_complete(struct il_priv *il, struct il_rx_pkt *pkt);
 
 void il_hdl_spectrum_measurement(struct il_priv *il, struct il_rx_pkt *pkt);

@@ -470,8 +470,6 @@ il3945_is_network_packet(struct il_priv *il, struct ieee80211_hdr *header)
 	}
 }
 
-#define SMALL_PACKET_SIZE 256
-
 static void
 il3945_pass_packet_to_mac80211(struct il_priv *il, struct il_rx_buf *rxb,
 			       struct ieee80211_rx_status *stats)
@@ -481,12 +479,9 @@ il3945_pass_packet_to_mac80211(struct il_priv *il, struct il_rx_buf *rxb,
 	struct il3945_rx_frame_hdr *rx_hdr = IL_RX_HDR(pkt);
 	struct il3945_rx_frame_end *rx_end = IL_RX_END(pkt);
 	u32 len = le16_to_cpu(rx_hdr->len);
-	struct sk_buff *skb;
-	__le16 fc = hdr->frame_control;
-	u32 fraglen = PAGE_SIZE << il->hw_params.rx_page_order;
 
 	/* We received data from the HW, so stop the watchdog */
-	if (unlikely(len + IL39_RX_FRAME_SIZE > fraglen)) {
+	if (unlikely(len + IL39_RX_FRAME_SIZE > IL_RX_PG_SIZE(il))) {
 		D_DROP("Corruption detected!\n");
 		return;
 	}
@@ -502,32 +497,11 @@ il3945_pass_packet_to_mac80211(struct il_priv *il, struct il_rx_buf *rxb,
 		D_INFO("Woke queues - frame received on passive channel\n");
 	}
 
-	skb = dev_alloc_skb(SMALL_PACKET_SIZE);
-	if (!skb) {
-		IL_ERR("dev_alloc_skb failed\n");
-		return;
-	}
-
 	if (!il3945_mod_params.sw_crypto)
-		il_set_decrypted_flag(il, (struct ieee80211_hdr *)pkt,
-				      le32_to_cpu(rx_end->status), stats);
+		il_set_decrypted_flag(il, hdr, le32_to_cpu(rx_end->status),
+				      stats);
 
-	/* If frame is small enough to fit into skb->head, copy it
-	 * and do not consume a full page
-	 */
-	if (len <= SMALL_PACKET_SIZE) {
-		memcpy(skb_put(skb, len), rx_hdr->payload, len);
-	} else {
-		skb_add_rx_frag(skb, 0, rxb->page,
-				(void *)rx_hdr->payload - (void *)pkt, len,
-				fraglen);
-		il->alloc_rxb_page--;
-		rxb->page = NULL;
-	}
-	il_update_stats(il, false, fc, len);
-	memcpy(IEEE80211_SKB_RXCB(skb), stats, sizeof(*stats));
-
-	ieee80211_rx(il->hw, skb);
+	il_pass_packet_to_mac80211(il, rxb, hdr, len, stats);
 }
 
 #define IL_DELAY_NEXT_SCAN_AFTER_ASSOC (HZ*6)
@@ -981,10 +955,11 @@ il3945_hw_nic_init(struct il_priv *il)
 			IL_ERR("Unable to initialize Rx queue\n");
 			return -ENOMEM;
 		}
-	} else
-		il3945_rx_queue_reset(il, rxq);
+	} else {
+		il_rx_queue_reset(il);
+	}
 
-	il3945_rx_replenish(il);
+	il3945_rx_queue_update(il);
 
 	il3945_rx_init(il, rxq);
 

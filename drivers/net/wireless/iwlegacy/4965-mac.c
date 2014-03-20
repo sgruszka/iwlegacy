@@ -96,39 +96,6 @@ struct il_mod_params il4965_mod_params = {
 	/* the rest are 0 by default */
 };
 
-void
-il4965_rx_queue_reset(struct il_priv *il, struct il_rx_queue *rxq)
-{
-	unsigned long flags;
-	int i;
-	spin_lock_irqsave(&rxq->lock, flags);
-	INIT_LIST_HEAD(&rxq->rx_free);
-	INIT_LIST_HEAD(&rxq->rx_used);
-	/* Fill the rx_used queue with _all_ of the Rx buffers */
-	for (i = 0; i < RX_FREE_BUFFERS + RX_QUEUE_SIZE; i++) {
-		/* In the reset function, these buffers may have been allocated
-		 * to an SKB, so we need to unmap and free potential storage */
-		if (rxq->pool[i].page != NULL) {
-			pci_unmap_page(il->pci_dev, rxq->pool[i].page_dma,
-				       PAGE_SIZE << il->hw_params.rx_page_order,
-				       PCI_DMA_FROMDEVICE);
-			__il_free_pages(il, rxq->pool[i].page);
-			rxq->pool[i].page = NULL;
-		}
-		list_add_tail(&rxq->pool[i].list, &rxq->rx_used);
-	}
-
-	for (i = 0; i < RX_QUEUE_SIZE; i++)
-		rxq->queue[i] = NULL;
-
-	/* Set us so that we have processed and used all buffers, but have
-	 * not restocked the Rx queue with fresh buffers */
-	rxq->read = rxq->write = 0;
-	rxq->write_actual = 0;
-	rxq->free_count = 0;
-	spin_unlock_irqrestore(&rxq->lock, flags);
-}
-
 int
 il4965_rx_init(struct il_priv *il, struct il_rx_queue *rxq)
 {
@@ -214,19 +181,17 @@ il4965_hw_nic_init(struct il_priv *il)
 			IL_ERR("Unable to initialize Rx queue\n");
 			return -ENOMEM;
 		}
-	} else
-		il4965_rx_queue_reset(il, rxq);
+	} else {
+		il_rx_queue_reset(il);
+	}
 
-	il4965_rx_replenish(il);
-
+	il4965_rx_queue_update(il);
 	il4965_rx_init(il, rxq);
 
-	spin_lock_irqsave(&il->lock, flags);
-
+	spin_lock_irqsave(&rxq->lock, flags);
 	rxq->need_update = 1;
 	il_rx_queue_update_write_ptr(il, rxq);
-
-	spin_unlock_irqrestore(&il->lock, flags);
+	spin_unlock_irqrestore(&rxq->lock, flags);
 
 	/* Allocate or reset and init all Tx and Command queues */
 	if (!il->txq) {
@@ -242,202 +207,34 @@ il4965_hw_nic_init(struct il_priv *il)
 }
 
 /**
- * il4965_dma_addr2rbd_ptr - convert a DMA address to a uCode read buffer ptr
- */
-static inline __le32
-il4965_dma_addr2rbd_ptr(struct il_priv *il, dma_addr_t dma_addr)
-{
-	return cpu_to_le32((u32) (dma_addr >> 8));
-}
-
-/**
- * il4965_rx_queue_restock - refill RX queue from pre-allocated pool
+ * il4965_rx_queue_update - update RX queue for ucode
  *
- * If there are slots in the RX queue that need to be restocked,
- * and we have free pre-allocated buffers, fill the ranks as much
- * as we can, pulling from rx_free.
- *
- * This moves the 'write' idx forward to catch up with 'processed', and
- * also updates the memory address in the firmware to reference the new
- * target buffer.
+ * Provide new page_dma addresses to the firmware (if they changed) and update
+ * write pointer.
  */
 void
-il4965_rx_queue_restock(struct il_priv *il)
+il4965_rx_queue_update(struct il_priv *il)
 {
 	struct il_rx_queue *rxq = &il->rxq;
-	struct list_head *element;
 	struct il_rx_buf *rxb;
 	unsigned long flags;
 
 	spin_lock_irqsave(&rxq->lock, flags);
-	while (il_rx_queue_space(rxq) > 0 && rxq->free_count) {
-		/* The overwritten rxb must be a used one */
-		rxb = rxq->queue[rxq->write];
-		BUG_ON(rxb && rxb->page);
 
-		/* Get next free Rx buffer, remove from free list */
-		element = rxq->rx_free.next;
-		rxb = list_entry(element, struct il_rx_buf, list);
-		list_del(element);
-
-		/* Point to Rx buffer via next RBD in circular buffer */
-		rxq->bd[rxq->write] =
-		    il4965_dma_addr2rbd_ptr(il, rxb->page_dma);
-		rxq->queue[rxq->write] = rxb;
+	while (il_rx_queue_space(rxq) > 0) {
+		rxb = &rxq->queue[rxq->write];
+		rxq->bd[rxq->write] = cpu_to_le32((u32)(rxb->page_dma >> 8));
 		rxq->write = (rxq->write + 1) & RX_QUEUE_MASK;
-		rxq->free_count--;
 	}
-	spin_unlock_irqrestore(&rxq->lock, flags);
-	/* If the pre-allocated buffer pool is dropping low, schedule to
-	 * refill it */
-	if (rxq->free_count <= RX_LOW_WATERMARK)
-		queue_work(il->workqueue, &il->rx_replenish);
 
 	/* If we've added more space for the firmware to place data, tell it.
 	 * Increment device's write pointer in multiples of 8. */
 	if (rxq->write_actual != (rxq->write & ~0x7)) {
-		spin_lock_irqsave(&rxq->lock, flags);
 		rxq->need_update = 1;
-		spin_unlock_irqrestore(&rxq->lock, flags);
 		il_rx_queue_update_write_ptr(il, rxq);
 	}
-}
 
-/**
- * il4965_rx_replenish - Move all used packet from rx_used to rx_free
- *
- * When moving to rx_free an SKB is allocated for the slot.
- *
- * Also restock the Rx queue via il_rx_queue_restock.
- * This is called as a scheduled work item (except for during initialization)
- */
-static void
-il4965_rx_allocate(struct il_priv *il, gfp_t priority)
-{
-	struct il_rx_queue *rxq = &il->rxq;
-	struct list_head *element;
-	struct il_rx_buf *rxb;
-	struct page *page;
-	dma_addr_t page_dma;
-	unsigned long flags;
-	gfp_t gfp_mask = priority;
-
-	while (1) {
-		spin_lock_irqsave(&rxq->lock, flags);
-		if (list_empty(&rxq->rx_used)) {
-			spin_unlock_irqrestore(&rxq->lock, flags);
-			return;
-		}
-		spin_unlock_irqrestore(&rxq->lock, flags);
-
-		if (rxq->free_count > RX_LOW_WATERMARK)
-			gfp_mask |= __GFP_NOWARN;
-
-		if (il->hw_params.rx_page_order > 0)
-			gfp_mask |= __GFP_COMP;
-
-		/* Alloc a new receive buffer */
-		page = alloc_pages(gfp_mask, il->hw_params.rx_page_order);
-		if (!page) {
-			if (net_ratelimit())
-				D_INFO("alloc_pages failed, " "order: %d\n",
-				       il->hw_params.rx_page_order);
-
-			if (rxq->free_count <= RX_LOW_WATERMARK &&
-			    net_ratelimit())
-				IL_ERR("Failed to alloc_pages with %s. "
-				       "Only %u free buffers remaining.\n",
-				       priority ==
-				       GFP_ATOMIC ? "GFP_ATOMIC" : "GFP_KERNEL",
-				       rxq->free_count);
-			/* We don't reschedule replenish work here -- we will
-			 * call the restock method and if it still needs
-			 * more buffers it will schedule replenish */
-			return;
-		}
-
-		/* Get physical address of the RB */
-		page_dma =
-		    pci_map_page(il->pci_dev, page, 0,
-				 PAGE_SIZE << il->hw_params.rx_page_order,
-				 PCI_DMA_FROMDEVICE);
-		if (unlikely(pci_dma_mapping_error(il->pci_dev, page_dma))) {
-			__free_pages(page, il->hw_params.rx_page_order);
-			break;
-		}
-
-		spin_lock_irqsave(&rxq->lock, flags);
-
-		if (list_empty(&rxq->rx_used)) {
-			spin_unlock_irqrestore(&rxq->lock, flags);
-			pci_unmap_page(il->pci_dev, page_dma,
-				       PAGE_SIZE << il->hw_params.rx_page_order,
-				       PCI_DMA_FROMDEVICE);
-			__free_pages(page, il->hw_params.rx_page_order);
-			return;
-		}
-
-		element = rxq->rx_used.next;
-		rxb = list_entry(element, struct il_rx_buf, list);
-		list_del(element);
-
-		BUG_ON(rxb->page);
-
-		rxb->page = page;
-		rxb->page_dma = page_dma;
-		list_add_tail(&rxb->list, &rxq->rx_free);
-		rxq->free_count++;
-		il->alloc_rxb_page++;
-
-		spin_unlock_irqrestore(&rxq->lock, flags);
-	}
-}
-
-void
-il4965_rx_replenish(struct il_priv *il)
-{
-	unsigned long flags;
-
-	il4965_rx_allocate(il, GFP_KERNEL);
-
-	spin_lock_irqsave(&il->lock, flags);
-	il4965_rx_queue_restock(il);
-	spin_unlock_irqrestore(&il->lock, flags);
-}
-
-void
-il4965_rx_replenish_now(struct il_priv *il)
-{
-	il4965_rx_allocate(il, GFP_ATOMIC);
-
-	il4965_rx_queue_restock(il);
-}
-
-/* Assumes that the skb field of the buffers in 'pool' is kept accurate.
- * If an SKB has been detached, the POOL needs to have its SKB set to NULL
- * This free routine walks the list of POOL entries and if SKB is set to
- * non NULL it is unmapped and freed
- */
-void
-il4965_rx_queue_free(struct il_priv *il, struct il_rx_queue *rxq)
-{
-	int i;
-	for (i = 0; i < RX_QUEUE_SIZE + RX_FREE_BUFFERS; i++) {
-		if (rxq->pool[i].page != NULL) {
-			pci_unmap_page(il->pci_dev, rxq->pool[i].page_dma,
-				       PAGE_SIZE << il->hw_params.rx_page_order,
-				       PCI_DMA_FROMDEVICE);
-			__il_free_pages(il, rxq->pool[i].page);
-			rxq->pool[i].page = NULL;
-		}
-	}
-
-	dma_free_coherent(&il->pci_dev->dev, 4 * RX_QUEUE_SIZE, rxq->bd,
-			  rxq->bd_dma);
-	dma_free_coherent(&il->pci_dev->dev, sizeof(struct il_rb_status),
-			  rxq->rb_stts, rxq->rb_stts_dma);
-	rxq->bd = NULL;
-	rxq->rb_stts = NULL;
+	spin_unlock_irqrestore(&rxq->lock, flags);
 }
 
 int
@@ -573,16 +370,11 @@ il4965_translate_rx_status(struct il_priv *il, u32 decrypt_in)
 	return decrypt_out;
 }
 
-#define SMALL_PACKET_SIZE 256
-
 static void
 il4965_pass_packet_to_mac80211(struct il_priv *il, struct ieee80211_hdr *hdr,
 			       u32 len, u32 ampdu_status, struct il_rx_buf *rxb,
 			       struct ieee80211_rx_status *stats)
 {
-	struct sk_buff *skb;
-	__le16 fc = hdr->frame_control;
-
 	/* We only process data packets if the interface is open */
 	if (unlikely(!il->is_open)) {
 		D_DROP("Dropping packet while interface is not open.\n");
@@ -599,27 +391,8 @@ il4965_pass_packet_to_mac80211(struct il_priv *il, struct ieee80211_hdr *hdr,
 	    il_set_decrypted_flag(il, hdr, ampdu_status, stats))
 		return;
 
-	skb = dev_alloc_skb(SMALL_PACKET_SIZE);
-	if (!skb) {
-		IL_ERR("dev_alloc_skb failed\n");
-		return;
-	}
-
-	if (len <= SMALL_PACKET_SIZE) {
-		memcpy(skb_put(skb, len), hdr, len);
-	} else {
-		skb_add_rx_frag(skb, 0, rxb->page, (void *)hdr - rxb_addr(rxb),
-				len, PAGE_SIZE << il->hw_params.rx_page_order);
-		il->alloc_rxb_page--;
-		rxb->page = NULL;
-	}
-
-	il_update_stats(il, false, fc, len);
-	memcpy(IEEE80211_SKB_RXCB(skb), stats, sizeof(*stats));
-
-	ieee80211_rx(il->hw, skb);
+	il_pass_packet_to_mac80211(il, rxb, hdr, len, stats);
 }
-
 
 static inline bool
 il4965_is_data_rx(struct il_rx_pkt *pkt)
@@ -4225,11 +3998,7 @@ il4965_rx_handle(struct il_priv *il)
 	struct il_rx_pkt *pkt;
 	struct il_rx_queue *rxq = &il->rxq;
 	u32 r, i;
-	bool reclaim;
-	unsigned long flags;
-	u8 fill_rx = 0;
-	u32 count = 8;
-	int total_empty;
+	int count = 8;
 
 	/* uCode's read idx (stored in shared DRAM) indicates the last Rx
 	 * buffer that the driver may process (last buffer filled by ucode). */
@@ -4240,110 +4009,55 @@ il4965_rx_handle(struct il_priv *il)
 	if (i == r)
 		D_RX("r = %d, i = %d\n", r, i);
 
-	/* calculate total frames need to be restock after handling RX */
-	total_empty = r - rxq->write_actual;
-	if (total_empty < 0)
-		total_empty += RX_QUEUE_SIZE;
-
-	if (total_empty > (RX_QUEUE_SIZE / 2))
-		fill_rx = 1;
-
 	while (i != r) {
-		rxb = rxq->queue[i];
-
-		/* If an RXB doesn't have a Rx queue slot associated with it,
-		 * then a bug has been introduced in the queue refilling
-		 * routines -- catch it here */
-		BUG_ON(rxb == NULL);
-
-		rxq->queue[i] = NULL;
-
-		pci_unmap_page(il->pci_dev, rxb->page_dma,
-			       PAGE_SIZE << il->hw_params.rx_page_order,
-			       PCI_DMA_FROMDEVICE);
+		rxb = &rxq->queue[i];
 		pkt = rxb_addr(rxb);
 
-		reclaim = il_need_reclaim(il, pkt);
+		pci_dma_sync_single_for_cpu(il->pci_dev, rxb->page_dma,
+					    IL_RX_PG_SIZE(il),
+					    PCI_DMA_FROMDEVICE);
+
+		D_RX("r = %d, i = %d, %s, 0x%02x\n", r, i,
+		     il_get_cmd_string(pkt->hdr.cmd), pkt->hdr.cmd);
 
 		if (il4965_is_data_rx(pkt)) {
-			D_RX("r = %d, i = %d, %s, 0x%02x\n", r, i,
-			     il_get_cmd_string(pkt->hdr.cmd), pkt->hdr.cmd);
 			il4965_data_rx(il, rxb);
-		} else if (il->handlers[pkt->hdr.cmd]) {
-			/* Based on type of command response or notification,
-			 * handle those that need handling via function in
-			 * handlers table. See il4965_setup_handlers()
-			 */
-			D_RX("r = %d, i = %d, %s, 0x%02x\n", r, i,
-			     il_get_cmd_string(pkt->hdr.cmd), pkt->hdr.cmd);
-			il->isr_stats.handlers[pkt->hdr.cmd]++;
-			il->handlers[pkt->hdr.cmd] (il, pkt);
 		} else {
-			/* No handling needed */
-			D_RX("r %d i %d No handler needed for %s, 0x%02x\n", r,
-			     i, il_get_cmd_string(pkt->hdr.cmd), pkt->hdr.cmd);
-		}
+			if (il->handlers[pkt->hdr.cmd]) {
+				/* Based on type of command response or
+				 * notification, handle those that need
+				 * handling via function in handlers table.
+				 * See il4965_setup_handlers().
+				 */
+				il->isr_stats.handlers[pkt->hdr.cmd]++;
+				il->handlers[pkt->hdr.cmd] (il, pkt);
+			}
 
-		/*
-		 * XXX: After here, we should always check rxb->page
-		 * against NULL before touching it or its virtual
-		 * memory (pkt). Because some handler might have
-		 * already taken or freed the pages.
-		 */
-
-		if (reclaim) {
-			/* Invoke any callbacks, transfer the buffer to caller,
-			 * and fire off the (possibly) blocking il_send_cmd()
-			 * as we reclaim the driver command queue */
-			if (rxb->page)
+			if (il_need_reclaim(il, pkt)) {
+				/* Invoke any callbacks, transfer the buffer
+				 * to caller, and fire off the (possibly)
+				 * blocking il_send_cmd().
+				 */
 				il_tx_cmd_complete(il, pkt);
-			else
-				IL_WARN("Claim null rxb?\n");
+			}
 		}
 
-		/* Reuse the page if possible. For notification packets and
-		 * SKBs that fail to Rx correctly, add them back into the
-		 * rx_free list for reuse later. */
-		spin_lock_irqsave(&rxq->lock, flags);
-		if (rxb->page != NULL) {
-			rxb->page_dma =
-			    pci_map_page(il->pci_dev, rxb->page, 0,
-					 PAGE_SIZE << il->hw_params.
-					 rx_page_order, PCI_DMA_FROMDEVICE);
-
-			if (unlikely(pci_dma_mapping_error(il->pci_dev,
-							   rxb->page_dma))) {
-				__il_free_pages(il, rxb->page);
-				rxb->page = NULL;
-				list_add_tail(&rxb->list, &rxq->rx_used);
-			} else {
-				list_add_tail(&rxb->list, &rxq->rx_free);
-				rxq->free_count++;
-			}
-		} else
-			list_add_tail(&rxb->list, &rxq->rx_used);
-
-		spin_unlock_irqrestore(&rxq->lock, flags);
-
+		pci_dma_sync_single_for_device(il->pci_dev, rxb->page_dma,
+					       IL_RX_PG_SIZE(il),
+					       PCI_DMA_FROMDEVICE);
 		i = (i + 1) & RX_QUEUE_MASK;
-		/* If there are a lot of unused frames,
-		 * restock the Rx queue so ucode wont assert. */
-		if (fill_rx) {
-			count++;
-			if (count >= 8) {
-				rxq->read = i;
-				il4965_rx_replenish_now(il);
-				count = 0;
-			}
+
+		count++;
+		if (count >= 8) {
+			rxq->read = i;
+			il4965_rx_queue_update(il);
+			count = 0;
 		}
 	}
 
-	/* Backtrack one entry */
 	rxq->read = i;
-	if (fill_rx)
-		il4965_rx_replenish_now(il);
-	else
-		il4965_rx_queue_restock(il);
+	if (count != 0)
+		il4965_rx_queue_update(il);
 }
 
 /* call this function to flush any scheduled tasklet */
@@ -4484,7 +4198,10 @@ il4965_irq_tasklet(struct il_priv *il)
 	 */
 	if (inta & CSR_INT_BIT_WAKEUP) {
 		D_ISR("Wakeup interrupt\n");
+		spin_lock_irqsave(&il->rxq.lock, flags);
 		il_rx_queue_update_write_ptr(il, &il->rxq);
+		spin_unlock_irqrestore(&il->rxq.lock, flags);
+
 		for (i = 0; i < il->hw_params.max_txq_num; i++)
 			il_txq_update_write_ptr(il, &il->txq[i]);
 		il->isr_stats.wakeup++;
@@ -5712,19 +5429,6 @@ il4965_bg_restart(struct work_struct *data)
 	}
 }
 
-static void
-il4965_bg_rx_replenish(struct work_struct *data)
-{
-	struct il_priv *il = container_of(data, struct il_priv, rx_replenish);
-
-	if (test_bit(S_EXIT_PENDING, &il->status))
-		return;
-
-	mutex_lock(&il->mutex);
-	il4965_rx_replenish(il);
-	mutex_unlock(&il->mutex);
-}
-
 /*****************************************************************************
  *
  * mac80211 entry point functions
@@ -6234,7 +5938,6 @@ il4965_setup_deferred_work(struct il_priv *il)
 	init_waitqueue_head(&il->wait_command_queue);
 
 	INIT_WORK(&il->restart, il4965_bg_restart);
-	INIT_WORK(&il->rx_replenish, il4965_bg_rx_replenish);
 	INIT_WORK(&il->run_time_calib_work, il4965_bg_run_time_calib_work);
 	INIT_DELAYED_WORK(&il->init_alive_start, il4965_bg_init_alive_start);
 	INIT_DELAYED_WORK(&il->alive_start, il4965_bg_alive_start);
@@ -6750,8 +6453,7 @@ il4965_pci_remove(struct pci_dev *pdev)
 
 	il4965_dealloc_ucode_pci(il);
 
-	if (il->rxq.bd)
-		il4965_rx_queue_free(il, &il->rxq);
+	il_rx_queue_free(il);
 	il4965_hw_txq_ctx_free(il);
 
 	il_eeprom_free(il);

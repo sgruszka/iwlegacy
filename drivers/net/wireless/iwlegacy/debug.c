@@ -903,9 +903,6 @@ il_dbgfs_rx_queue_read(struct file *file, char __user *user_buf, size_t count,
 
 	pos += scnprintf(buf + pos, bufsz - pos, "read: %u\n", rxq->read);
 	pos += scnprintf(buf + pos, bufsz - pos, "write: %u\n", rxq->write);
-	pos +=
-	    scnprintf(buf + pos, bufsz - pos, "free_count: %u\n",
-		      rxq->free_count);
 	if (rxq->rb_stts) {
 		pos +=
 		    scnprintf(buf + pos, bufsz - pos, "closed_rb_num: %u\n",

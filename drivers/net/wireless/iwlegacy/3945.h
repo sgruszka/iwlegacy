@@ -190,8 +190,7 @@ struct il3945_ibss_seq {
  *
  *****************************************************************************/
 int il3945_calc_db_from_ratio(int sig_ratio);
-void il3945_rx_replenish(void *data);
-void il3945_rx_queue_reset(struct il_priv *il, struct il_rx_queue *rxq);
+void il3945_rx_queue_update(struct il_priv *il);
 unsigned int il3945_fill_beacon_frame(struct il_priv *il,
 				      struct ieee80211_hdr *hdr, int left);
 int il3945_dump_nic_event_log(struct il_priv *il, bool full_log, char **buf,

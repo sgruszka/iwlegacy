@@ -2500,40 +2500,6 @@ EXPORT_SYMBOL(il_mac_sta_remove);
  * and fire the RX interrupt.  The driver can then query the READ idx and
  * process as many packets as possible, moving the WRITE idx forward as it
  * resets the Rx queue buffers with new memory.
- *
- * The management in the driver is as follows:
- * + A list of pre-allocated SKBs is stored in iwl->rxq->rx_free.  When
- *   iwl->rxq->free_count drops to or below RX_LOW_WATERMARK, work is scheduled
- *   to replenish the iwl->rxq->rx_free.
- * + In il_rx_replenish (scheduled) if 'processed' != 'read' then the
- *   iwl->rxq is replenished and the READ IDX is updated (updating the
- *   'processed' and 'read' driver idxes as well)
- * + A received packet is processed and handed to the kernel network stack,
- *   detached from the iwl->rxq.  The driver 'processed' idx is updated.
- * + The Host/Firmware iwl->rxq is replenished at tasklet time from the rx_free
- *   list. If there are no allocated buffers in iwl->rxq->rx_free, the READ
- *   IDX is not incremented and iwl->status(RX_STALLED) is set.  If there
- *   were enough free buffers and RX_STALLED is set it is cleared.
- *
- *
- * Driver sequence:
- *
- * il_rx_queue_alloc()   Allocates rx_free
- * il_rx_replenish()     Replenishes rx_free list from rx_used, and calls
- *                            il_rx_queue_restock
- * il_rx_queue_restock() Moves available buffers from rx_free into Rx
- *                            queue, updates firmware pointers, and updates
- *                            the WRITE idx.  If insufficient rx_free buffers
- *                            are available, schedules il_rx_replenish
- *
- * -- enable interrupts --
- * ISR - il_rx()         Detach il_rx_bufs from pool up to the
- *                            READ IDX, detaching the SKB from the pool.
- *                            Moves the packet buffer from queue to rx_used.
- *                            Calls il_rx_queue_restock to refill any empty
- *                            slots.
- * ...
- *
  */
 
 /**
@@ -2559,25 +2525,24 @@ EXPORT_SYMBOL(il_rx_queue_space);
 void
 il_rx_queue_update_write_ptr(struct il_priv *il, struct il_rx_queue *q)
 {
-	unsigned long flags;
-	u32 rx_wrt_ptr_reg = il->hw_params.rx_wrt_ptr_reg;
+	const u32 rx_wrt_ptr_reg = il->hw_params.rx_wrt_ptr_reg;
 	u32 reg;
 
-	spin_lock_irqsave(&q->lock, flags);
+	lockdep_assert_held(&q->lock);
 
 	if (q->need_update == 0)
-		goto exit_unlock;
+		return;
 
 	/* If power-saving is in use, make sure device is awake */
 	if (test_bit(S_POWER_PMI, &il->status)) {
 		reg = _il_rd(il, CSR_UCODE_DRV_GP1);
 
 		if (reg & CSR_UCODE_DRV_GP1_BIT_MAC_SLEEP) {
-			D_INFO("Rx queue requesting wakeup," " GP1 = 0x%x\n",
+			D_INFO("Rx queue requesting wakeup, GP1 = 0x%x\n",
 			       reg);
 			il_set_bit(il, CSR_GP_CNTRL,
 				   CSR_GP_CNTRL_REG_FLAG_MAC_ACCESS_REQ);
-			goto exit_unlock;
+			return;
 		}
 
 		q->write_actual = (q->write & ~0x7);
@@ -2591,22 +2556,104 @@ il_rx_queue_update_write_ptr(struct il_priv *il, struct il_rx_queue *q)
 	}
 
 	q->need_update = 0;
-
-exit_unlock:
-	spin_unlock_irqrestore(&q->lock, flags);
 }
 EXPORT_SYMBOL(il_rx_queue_update_write_ptr);
+
+static void
+il_free_rx_pages(struct il_priv *il, struct page *page, dma_addr_t page_dma)
+{
+	pci_unmap_page(il->pci_dev, page_dma, IL_RX_PG_SIZE(il),
+		       PCI_DMA_FROMDEVICE);
+	__free_pages(page, il->hw_params.rx_page_order);
+}
+
+static struct page *
+il_alloc_rx_pages(struct il_priv *il, dma_addr_t *page_dma, gfp_t gfp)
+{
+	struct page *page;
+
+	page = alloc_pages(gfp, il->hw_params.rx_page_order);
+	if (!page)
+		return NULL;
+
+	*page_dma = pci_map_page(il->pci_dev, page, 0, IL_RX_PG_SIZE(il),
+				 PCI_DMA_FROMDEVICE);
+	if (unlikely(pci_dma_mapping_error(il->pci_dev, *page_dma))) {
+		__free_pages(page, il->hw_params.rx_page_order);
+		return NULL;
+	}
+
+	return page;
+}
+
+static void
+il_rx_queue_free_pages(struct il_priv *il)
+{
+	struct il_rx_queue *rxq = &il->rxq;
+	int i;
+
+	for (i = 0; i < RX_QUEUE_SIZE; i++) {
+		struct il_rx_buf *rxb = &rxq->queue[i];
+
+		if (rxb->page) {
+			il_free_rx_pages(il, rxb->page, rxb->page_dma);
+			rxb->page = NULL;
+		}
+	}
+}
+
+static int
+il_rx_queue_alloc_pages(struct il_priv *il)
+{
+	struct il_rx_queue *rxq = &il->rxq;
+	struct page *page;
+	dma_addr_t page_dma;
+	int i;
+
+	for (i = 0; i < RX_QUEUE_SIZE; i++) {
+		struct il_rx_buf *rxb = &rxq->queue[i];
+
+		page = il_alloc_rx_pages(il, &page_dma, GFP_KERNEL);
+		if (!page)
+			goto err;
+
+		rxb->page_dma = page_dma;
+		rxb->page = page;
+	}
+
+	return 0;
+
+err:
+	il_rx_queue_free_pages(il);
+	return -ENOMEM;
+}
+
+void
+il_rx_queue_free(struct il_priv *il)
+{
+	struct il_rx_queue *rxq = &il->rxq;
+
+	if (WARN_ON(rxq->bd == NULL))
+		return;
+
+	il_rx_queue_free_pages(il);
+
+	dma_free_coherent(&il->pci_dev->dev, 4 * RX_QUEUE_SIZE, rxq->bd,
+			  rxq->bd_dma);
+	dma_free_coherent(&il->pci_dev->dev, sizeof(struct il_rb_status),
+			  rxq->rb_stts, rxq->rb_stts_dma);
+	rxq->bd = NULL;
+	rxq->rb_stts = NULL;
+}
+EXPORT_SYMBOL(il_rx_queue_free);
 
 int
 il_rx_queue_alloc(struct il_priv *il)
 {
 	struct il_rx_queue *rxq = &il->rxq;
 	struct device *dev = &il->pci_dev->dev;
-	int i;
 
 	spin_lock_init(&rxq->lock);
-	INIT_LIST_HEAD(&rxq->rx_free);
-	INIT_LIST_HEAD(&rxq->rx_used);
 
 	/* Alloc the circular buffer of Read Buffer Descriptors (RBDs) */
 	rxq->bd = dma_alloc_coherent(dev, 4 * RX_QUEUE_SIZE, &rxq->bd_dma,
@@ -2619,18 +2666,17 @@ il_rx_queue_alloc(struct il_priv *il)
 	if (!rxq->rb_stts)
 		goto err_rb;
 
-	/* Fill the rx_used queue with _all_ of the Rx buffers */
-	for (i = 0; i < RX_FREE_BUFFERS + RX_QUEUE_SIZE; i++)
-		list_add_tail(&rxq->pool[i].list, &rxq->rx_used);
+	if (il_rx_queue_alloc_pages(il))
+		goto err_pages;
 
-	/* Set us so that we have processed and used all buffers, but have
-	 * not restocked the Rx queue with fresh buffers */
 	rxq->read = rxq->write = 0;
 	rxq->write_actual = 0;
-	rxq->free_count = 0;
 	rxq->need_update = 0;
 	return 0;
 
+err_pages:
+	dma_free_coherent(&il->pci_dev->dev, sizeof(struct il_rb_status),
+			  rxq->rb_stts, rxq->rb_stts_dma);
 err_rb:
 	dma_free_coherent(&il->pci_dev->dev, 4 * RX_QUEUE_SIZE, rxq->bd,
 			  rxq->bd_dma);
@@ -2638,6 +2684,73 @@ err_bd:
 	return -ENOMEM;
 }
 EXPORT_SYMBOL(il_rx_queue_alloc);
+
+void
+il_rx_queue_reset(struct il_priv *il)
+{
+	struct il_rx_queue *rxq = &il->rxq;
+	unsigned long flags;
+
+	spin_lock_irqsave(&rxq->lock, flags);
+	rxq->read = rxq->write = 0;
+	rxq->write_actual = 0;
+	spin_unlock_irqrestore(&rxq->lock, flags);
+}
+EXPORT_SYMBOL(il_rx_queue_reset);
+
+void
+il_pass_packet_to_mac80211(struct il_priv *il, struct il_rx_buf *rxb,
+			   struct ieee80211_hdr *hdr, unsigned len,
+			   struct ieee80211_rx_status *stats)
+{
+	const unsigned SMALL_PACKET_SIZE = 256;
+	__le16 fc = hdr->frame_control;
+	struct sk_buff *skb;
+	struct page *page, *new_page;
+	dma_addr_t page_dma, new_page_dma;
+	unsigned long flags;
+
+	if (len > SMALL_PACKET_SIZE) {
+		/* We have to pass pages to mac80211 and allocate new pages
+		 * as receive buffer. Drop packet if no memory.
+		 */
+		new_page = il_alloc_rx_pages(il, &new_page_dma, GFP_ATOMIC);
+		if (!new_page)
+			return;
+
+		page_dma = rxb->page_dma;
+		page = rxb->page;
+
+		spin_lock_irqsave(&il->rxq.lock, flags);
+		rxb->page_dma = new_page_dma;
+		rxb->page = new_page;
+		spin_unlock_irqrestore(&il->rxq.lock, flags);
+	}
+
+	skb = dev_alloc_skb(SMALL_PACKET_SIZE);
+	if (!skb) {
+		if (len > SMALL_PACKET_SIZE)
+			il_free_rx_pages(il, page, page_dma);
+		IL_ERR("dev_alloc_skb failed\n");
+		return;
+	}
+
+	/* If frame is small enough to fit into skb->head, copy it
+	 * and do not consume a full page.
+	 */
+	if (len <= SMALL_PACKET_SIZE) {
+		memcpy(skb_put(skb, len), hdr, len);
+	} else {
+		skb_add_rx_frag(skb, 0, page, (void *)hdr - page_address(page),
+				len, IL_RX_PG_SIZE(il));
+	}
+
+	il_update_stats(il, false, fc, len);
+	memcpy(IEEE80211_SKB_RXCB(skb), stats, sizeof(*stats));
+
+	ieee80211_rx(il->hw, skb);
+}
+EXPORT_SYMBOL(il_pass_packet_to_mac80211);
 
 void
 il_hdl_spectrum_measurement(struct il_priv *il, struct il_rx_pkt *pkt)
@@ -3326,7 +3439,7 @@ il_tx_cmd_complete(struct il_priv *il, struct il_rx_pkt *pkt)
 }
 EXPORT_SYMBOL(il_tx_cmd_complete);
 
-MODULE_DESCRIPTION("iwl-legacy: common functions for 3945 and 4965");
+MODULE_DESCRIPTION("iwlegacy: common functions for 3945 and 4965");
 MODULE_VERSION(IWLWIFI_VERSION);
 MODULE_AUTHOR(DRV_COPYRIGHT " " DRV_AUTHOR);
 MODULE_LICENSE("GPL");
