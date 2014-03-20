@@ -842,8 +842,6 @@ il4965_free_tfds_in_queue(struct il_priv *il, int sta_id, int tid, int freed)
 	}
 }
 
-#define IL_TX_QUEUE_MSK	0xfffff
-
 static bool
 il4965_is_single_rx_stream(struct il_priv *il)
 {
