@@ -289,16 +289,19 @@ il3945_tx_queue_reclaim(struct il_priv *il, int txq_id, int idx)
 	struct il_tx_queue *txq = &il->txq[txq_id];
 	struct il_queue *q = &txq->q;
 	struct sk_buff *skb;
+	int end;
 
 	BUG_ON(txq_id == IL_CMD_QUEUE);
 
-	for (idx = il_queue_inc_wrap(idx, q->n_bd); q->read_ptr != idx;
-	     q->read_ptr = il_queue_inc_wrap(q->read_ptr, q->n_bd)) {
+	end = il_txq_inc(idx);
 
+	while (q->read_ptr != end) {
 		skb = txq->skbs[txq->q.read_ptr];
 		ieee80211_tx_status(il->hw, skb);
 		txq->skbs[txq->q.read_ptr] = NULL;
 		il->ops->txq_free_tfd(il, txq);
+
+		q->read_ptr = il_txq_inc(q->read_ptr);
 	}
 
 	if (il_queue_space(q) > q->low_mark && txq_id >= 0 &&
@@ -322,12 +325,8 @@ il3945_hdl_tx(struct il_priv *il, struct il_rx_pkt *pkt)
 	int rate_idx;
 	int fail;
 
-	if (idx >= txq->q.n_bd || il_queue_used(&txq->q, idx) == 0) {
-		IL_ERR("Read idx for DMA queue txq_id (%d) idx %d "
-		       "is out of range [0-%d] %d %d\n", txq_id, idx,
-		       txq->q.n_bd, txq->q.write_ptr, txq->q.read_ptr);
+	if (IL_WARN_OUT_OF_RANGE(il, txq, idx))
 		return;
-	}
 
 	/*
 	 * Firmware will not transmit frame on passive channel, if it not yet
@@ -969,12 +968,10 @@ il3945_hw_txq_ctx_free(struct il_priv *il)
 	int txq_id;
 
 	/* Tx queues */
-	if (il->txq)
+	if (il->txq) {
 		for (txq_id = 0; txq_id < il->hw_params.max_txq_num; txq_id++)
-			if (txq_id == IL_CMD_QUEUE)
-				il_cmd_queue_free(il);
-			else
 				il_tx_queue_free(il, txq_id);
+	}
 
 	/* free tx queue structure */
 	il_free_txq_mem(il);

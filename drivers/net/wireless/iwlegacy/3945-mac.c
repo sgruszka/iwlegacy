@@ -630,7 +630,7 @@ il3945_tx_skb(struct il_priv *il,
 			  ieee80211_hdrlen(fc));
 
 	/* Tell device the write idx *just past* this latest filled TFD */
-	q->write_ptr = il_queue_inc_wrap(q->write_ptr, q->n_bd);
+	q->write_ptr = il_txq_inc(q->write_ptr);
 	il_txq_update_wptr(il, txq);
 	spin_unlock(&il->lock);
 

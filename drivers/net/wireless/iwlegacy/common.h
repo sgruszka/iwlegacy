@@ -127,7 +127,6 @@ struct il_cmd_meta {
  * Contains common data for Rx and Tx queues
  */
 struct il_queue {
-	int n_bd;		/* number of BDs in this queue */
 	int write_ptr;		/* 1-st empty entry (idx) host_w */
 	int read_ptr;		/* last used entry (idx) host_r */
 	/* use for monitoring and recovering the stuck queue */
@@ -1719,8 +1718,6 @@ void il_hdl_csa(struct il_priv *il, struct il_rx_pkt *pkt);
 /*****************************************************
 * RX
 ******************************************************/
-void il_cmd_queue_unmap(struct il_priv *il);
-void il_cmd_queue_free(struct il_priv *il);
 int il_rx_queue_alloc(struct il_priv *il);
 void il_rx_queue_free(struct il_priv *il);
 void il_rxq_update_wptr(struct il_priv *il, struct il_rx_queue *q);
@@ -1743,6 +1740,7 @@ int il_tx_queue_init(struct il_priv *il, u32 txq_id);
 void il_tx_queue_reset(struct il_priv *il, u32 txq_id);
 void il_tx_queue_unmap(struct il_priv *il, int txq_id);
 void il_tx_queue_free(struct il_priv *il, int txq_id);
+void il_cmd_queue_unmap(struct il_priv *il);
 void il_setup_watchdog(struct il_priv *il);
 /*****************************************************
  * TX power
@@ -2183,29 +2181,37 @@ il_sta_id_or_broadcast(struct il_priv *il, struct ieee80211_sta *sta)
 	return sta_id;
 }
 
+#define TFD_QUEUE_SIZE_MAX      256
+#define TFD_QUEUE_SIZE_BC_DUP	64
+#define TFD_QUEUE_BC_SIZE	(TFD_QUEUE_SIZE_MAX + TFD_QUEUE_SIZE_BC_DUP)
+#define IL_TX_DMA_MASK		DMA_BIT_MASK(36)
+#define IL_NUM_OF_TBS		20
+
 /**
- * il_queue_inc_wrap - increment queue idx, wrap back to beginning
+ * il_tq_inc - increment queue idx, wrap back to beginning
  * @idx -- current idx
- * @n_bd -- total number of entries in queue (must be power of 2)
  */
 static inline int
-il_queue_inc_wrap(int idx, int n_bd)
+il_txq_inc(int idx)
 {
-	return ++idx & (n_bd - 1);
+	return ++idx & (TFD_QUEUE_SIZE_MAX - 1);
 }
 
 /**
- * il_queue_dec_wrap - decrement queue idx, wrap back to end
+ * il_tq_dec - decrement queue idx, wrap back to end
  * @idx -- current idx
- * @n_bd -- total number of entries in queue (must be power of 2)
  */
 static inline int
-il_queue_dec_wrap(int idx, int n_bd)
+il_txq_dec(int idx)
 {
-	return --idx & (n_bd - 1);
+	return --idx & (TFD_QUEUE_SIZE_MAX - 1);
 }
 
-/* TODO: Move fw_desc functions to iwl-pci.ko */
+#define IL_WARN_OUT_OF_RANGE(il, txq, idx) \
+	WARN(idx >= TFD_QUEUE_SIZE_MAX || il_queue_used(&txq->q, idx) == 0, \
+	     "Index %d for queue %d is out of range [0-%d] %d %d.\n", idx, \
+	     txq->q.id, TFD_QUEUE_SIZE_MAX, txq->q.write_ptr, txq->q.read_ptr)
+
 static inline void
 il_free_fw_desc(struct pci_dev *pci_dev, struct fw_desc *desc)
 {
@@ -2397,12 +2403,6 @@ struct il_rb_status {
 	__le16 finished_fr_nam;
 	__le32 __unused;	/* 3945 only */
 } __packed;
-
-#define TFD_QUEUE_SIZE_MAX      256
-#define TFD_QUEUE_SIZE_BC_DUP	64
-#define TFD_QUEUE_BC_SIZE	(TFD_QUEUE_SIZE_MAX + TFD_QUEUE_SIZE_BC_DUP)
-#define IL_TX_DMA_MASK		DMA_BIT_MASK(36)
-#define IL_NUM_OF_TBS		20
 
 static inline u8
 il_get_dma_hi_addr(dma_addr_t addr)

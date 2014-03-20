@@ -2756,6 +2756,26 @@ il_set_decrypted_flag(struct il_priv *il, struct ieee80211_hdr *hdr,
 }
 EXPORT_SYMBOL(il_set_decrypted_flag);
 
+/* DMA queue services, theory of operation.
+ *
+ * A Tx or Rx queue resides in host DRAM, and is comprised of a circular buffer
+ * of buffer descriptors, each of which points to one or more data buffers for
+ * the device to read from or fill.  Driver and device exchange status of each
+ * queue via "read" and "write" pointers.  Driver keeps minimum of 2 empty
+ * entries in each circular buffer, to protect against confusing empty and full
+ * queue states.
+ *
+ * The device reads or writes the data in the queues via the device's several
+ * DMA/FIFO channels.  Each queue is mapped to a single DMA channel.
+ *
+ * For Tx queue, there are low mark and high mark limits. If, after queuing
+ * the packet for Tx, free space become < low mark, Tx queue stopped. When
+ * reclaiming packets (on 'tx done IRQ), if free space become > high mark,
+ * Tx queue resumed.
+ *
+ * See more detailed info in 4965.h.
+ */
+
 /**
  * il_txq_update_wptr - Send new write idx to hardware
  */
@@ -2790,11 +2810,48 @@ il_txq_update_wptr(struct il_priv *il, struct il_tx_queue *txq)
 		 * uCode will never sleep when we're
 		 * trying to tx (during RFKILL, we're not trying to tx).
 		 */
-	} else
+	} else {
 		_il_wr(il, HBUS_TARG_WRPTR, txq->q.write_ptr | (txq_id << 8));
+	}
+
 	txq->need_update = 0;
 }
 EXPORT_SYMBOL(il_txq_update_wptr);
+
+/**
+ * il_cmd_queue_unmap - Unmap any remaining DMA mappings from command queue
+ */
+void
+il_cmd_queue_unmap(struct il_priv *il)
+{
+	struct il_tx_queue *txq = &il->txq[IL_CMD_QUEUE];
+	struct il_queue *q = &txq->q;
+	int i;
+
+	while (q->read_ptr != q->write_ptr) {
+		i = il_get_cmd_idx(q, q->read_ptr, 0);
+
+		if (txq->meta[i].flags & CMD_MAPPED) {
+			pci_unmap_single(il->pci_dev,
+					 dma_unmap_addr(&txq->meta[i], mapping),
+					 dma_unmap_len(&txq->meta[i], len),
+					 PCI_DMA_BIDIRECTIONAL);
+			txq->meta[i].flags = 0;
+		}
+
+		q->read_ptr = il_txq_inc(q->read_ptr);
+	}
+
+	i = q->n_win;
+	if (txq->meta[i].flags & CMD_MAPPED) {
+		pci_unmap_single(il->pci_dev,
+				 dma_unmap_addr(&txq->meta[i], mapping),
+				 dma_unmap_len(&txq->meta[i], len),
+				 PCI_DMA_BIDIRECTIONAL);
+		txq->meta[i].flags = 0;
+	}
+}
+EXPORT_SYMBOL(il_cmd_queue_unmap);
 
 /**
  * il_tx_queue_unmap -  Unmap any remaining DMA mappings and free skb's
@@ -2805,12 +2862,9 @@ il_tx_queue_unmap(struct il_priv *il, int txq_id)
 	struct il_tx_queue *txq = &il->txq[txq_id];
 	struct il_queue *q = &txq->q;
 
-	if (q->n_bd == 0)
-		return;
-
 	while (q->write_ptr != q->read_ptr) {
 		il->ops->txq_free_tfd(il, txq);
-		q->read_ptr = il_queue_inc_wrap(q->read_ptr, q->n_bd);
+		q->read_ptr = il_txq_inc(q->read_ptr);
 	}
 }
 EXPORT_SYMBOL(il_tx_queue_unmap);
@@ -2828,131 +2882,38 @@ il_tx_queue_free(struct il_priv *il, int txq_id)
 {
 	struct il_tx_queue *txq = &il->txq[txq_id];
 	struct device *dev = &il->pci_dev->dev;
-	int i;
+	int i, actual_slots;
 
-	il_tx_queue_unmap(il, txq_id);
+	if (txq->cmd == NULL)
+		return;
+
+	if (txq_id == IL_CMD_QUEUE) {
+		il_cmd_queue_unmap(il);
+		actual_slots = TFD_CMD_SLOTS + 1;
+	} else {
+		il_tx_queue_unmap(il, txq_id);
+		actual_slots = TFD_TX_CMD_SLOTS;
+	}
 
 	/* De-alloc array of command/tx buffers */
-	for (i = 0; i < TFD_TX_CMD_SLOTS; i++)
+	for (i = 0; i < actual_slots; i++)
 		kfree(txq->cmd[i]);
 
 	/* De-alloc circular buffer of TFDs */
-	if (txq->q.n_bd)
-		dma_free_coherent(dev, il->hw_params.tfd_size * txq->q.n_bd,
-				  txq->tfds, txq->q.dma_addr);
+	dma_free_coherent(dev, il->hw_params.tfd_size * TFD_QUEUE_SIZE_MAX,
+			  txq->tfds, txq->q.dma_addr);
 
 	/* De-alloc array of per-TFD driver data */
 	kfree(txq->skbs);
-	txq->skbs = NULL;
 
 	/* deallocate arrays */
 	kfree(txq->cmd);
 	kfree(txq->meta);
-	txq->cmd = NULL;
-	txq->meta = NULL;
 
 	/* 0-fill queue descriptor structure */
 	memset(txq, 0, sizeof(*txq));
 }
 EXPORT_SYMBOL(il_tx_queue_free);
-
-/**
- * il_cmd_queue_unmap - Unmap any remaining DMA mappings from command queue
- */
-void
-il_cmd_queue_unmap(struct il_priv *il)
-{
-	struct il_tx_queue *txq = &il->txq[IL_CMD_QUEUE];
-	struct il_queue *q = &txq->q;
-	int i;
-
-	if (q->n_bd == 0)
-		return;
-
-	while (q->read_ptr != q->write_ptr) {
-		i = il_get_cmd_idx(q, q->read_ptr, 0);
-
-		if (txq->meta[i].flags & CMD_MAPPED) {
-			pci_unmap_single(il->pci_dev,
-					 dma_unmap_addr(&txq->meta[i], mapping),
-					 dma_unmap_len(&txq->meta[i], len),
-					 PCI_DMA_BIDIRECTIONAL);
-			txq->meta[i].flags = 0;
-		}
-
-		q->read_ptr = il_queue_inc_wrap(q->read_ptr, q->n_bd);
-	}
-
-	i = q->n_win;
-	if (txq->meta[i].flags & CMD_MAPPED) {
-		pci_unmap_single(il->pci_dev,
-				 dma_unmap_addr(&txq->meta[i], mapping),
-				 dma_unmap_len(&txq->meta[i], len),
-				 PCI_DMA_BIDIRECTIONAL);
-		txq->meta[i].flags = 0;
-	}
-}
-EXPORT_SYMBOL(il_cmd_queue_unmap);
-
-/**
- * il_cmd_queue_free - Deallocate DMA queue.
- * @txq: Transmit queue to deallocate.
- *
- * Empty queue by removing and destroying all BD's.
- * Free all buffers.
- * 0-fill, but do not free "txq" descriptor structure.
- */
-void
-il_cmd_queue_free(struct il_priv *il)
-{
-	struct il_tx_queue *txq = &il->txq[IL_CMD_QUEUE];
-	struct device *dev = &il->pci_dev->dev;
-	int i;
-
-	il_cmd_queue_unmap(il);
-
-	/* De-alloc array of command/tx buffers */
-	for (i = 0; i <= TFD_CMD_SLOTS; i++)
-		kfree(txq->cmd[i]);
-
-	/* De-alloc circular buffer of TFDs */
-	if (txq->q.n_bd)
-		dma_free_coherent(dev, il->hw_params.tfd_size * txq->q.n_bd,
-				  txq->tfds, txq->q.dma_addr);
-
-	/* deallocate arrays */
-	kfree(txq->cmd);
-	kfree(txq->meta);
-	txq->cmd = NULL;
-	txq->meta = NULL;
-
-	/* 0-fill queue descriptor structure */
-	memset(txq, 0, sizeof(*txq));
-}
-EXPORT_SYMBOL(il_cmd_queue_free);
-
-/*************** DMA-QUEUE-GENERAL-FUNCTIONS  *****
- * DMA services
- *
- * Theory of operation
- *
- * A Tx or Rx queue resides in host DRAM, and is comprised of a circular buffer
- * of buffer descriptors, each of which points to one or more data buffers for
- * the device to read from or fill.  Driver and device exchange status of each
- * queue via "read" and "write" pointers.  Driver keeps minimum of 2 empty
- * entries in each circular buffer, to protect against confusing empty and full
- * queue states.
- *
- * The device reads or writes the data in the queues via the device's several
- * DMA/FIFO channels.  Each queue is mapped to a single DMA channel.
- *
- * For Tx queue, there are low mark and high mark limits. If, after queuing
- * the packet for Tx, free space become < low mark, Tx queue stopped. When
- * reclaiming packets (on 'tx done IRQ), if free space become > high mark,
- * Tx queue resumed.
- *
- * See more detailed info in 4965.h.
- ***************************************************/
 
 int
 il_queue_space(const struct il_queue *q)
@@ -2960,7 +2921,7 @@ il_queue_space(const struct il_queue *q)
 	int s = q->read_ptr - q->write_ptr;
 
 	if (q->read_ptr > q->write_ptr)
-		s -= q->n_bd;
+		s -= TFD_QUEUE_SIZE_MAX;
 
 	if (s <= 0)
 		s += q->n_win;
@@ -2979,14 +2940,6 @@ EXPORT_SYMBOL(il_queue_space);
 static int
 il_queue_init(struct il_priv *il, struct il_queue *q, int slots, u32 id)
 {
-	/*
-	 * TFD_QUEUE_SIZE_MAX must be power-of-two size, otherwise
-	 * il_queue_inc_wrap and il_queue_dec_wrap are broken.
-	 */
-	BUILD_BUG_ON(TFD_QUEUE_SIZE_MAX & (TFD_QUEUE_SIZE_MAX - 1));
-	/* FIXME: remove q->n_bd */
-	q->n_bd = TFD_QUEUE_SIZE_MAX;
-
 	q->n_win = slots;
 	q->id = id;
 
@@ -3011,39 +2964,34 @@ il_queue_init(struct il_priv *il, struct il_queue *q, int slots, u32 id)
  * il_tx_queue_alloc - Alloc driver data and TFD CB for one Tx/cmd queue
  */
 static int
-il_tx_queue_alloc(struct il_priv *il, struct il_tx_queue *txq, u32 id)
+il_tx_queue_alloc(struct il_priv *il, struct il_tx_queue *txq, int id)
 {
 	struct device *dev = &il->pci_dev->dev;
 	size_t tfd_sz = il->hw_params.tfd_size * TFD_QUEUE_SIZE_MAX;
 
-	/* Driver ilate data, only for Tx (not command) queues,
-	 * not shared with device. */
 	if (id != IL_CMD_QUEUE) {
 		txq->skbs = kcalloc(TFD_QUEUE_SIZE_MAX, sizeof(struct skb *),
 				    GFP_KERNEL);
 		if (!txq->skbs) {
 			IL_ERR("Fail to alloc skbs\n");
-			goto error;
+			return -ENOMEM;
 		}
-	} else
+	} else {
 		txq->skbs = NULL;
+	}
 
-	/* Circular buffer of transmit frame descriptors (TFDs),
-	 * shared with device */
-	txq->tfds =
-	    dma_alloc_coherent(dev, tfd_sz, &txq->q.dma_addr, GFP_KERNEL);
-	if (!txq->tfds)
-		goto error;
+	/* Circular buffer of transmit frame descriptors (TFDs), shared
+	 * with device.
+	 */
+	txq->tfds = dma_alloc_coherent(dev, tfd_sz, &txq->q.dma_addr,
+				       GFP_KERNEL);
+	if (!txq->tfds) {
+		kfree(txq->skbs);
+		return -ENOMEM;
 
-	txq->q.id = id;
+	}
 
 	return 0;
-
-error:
-	kfree(txq->skbs);
-	txq->skbs = NULL;
-
-	return -ENOMEM;
 }
 
 /**
@@ -3096,6 +3044,7 @@ il_tx_queue_init(struct il_priv *il, u32 txq_id)
 		goto err;
 
 	txq->need_update = 0;
+	txq->q.id = txq_id;
 
 	/*
 	 * For the default queues 0-3, set up the swq_id
@@ -3118,6 +3067,7 @@ err:
 out_free_arrays:
 	kfree(txq->meta);
 	kfree(txq->cmd);
+	txq->cmd = NULL;
 
 	return -ENOMEM;
 }
@@ -3237,7 +3187,7 @@ il_enqueue_hcmd(struct il_priv *il, struct il_host_cmd *hcmd)
 
 	/* Increment and update queue's write idx. */
 	txq->need_update = 1;
-	q->write_ptr = il_queue_inc_wrap(q->write_ptr, q->n_bd);
+	q->write_ptr = il_txq_inc(q->write_ptr);
 	il_txq_update_wptr(il, txq);
 
 	spin_unlock_bh(&il->hcmd_lock);
@@ -3249,24 +3199,21 @@ static void
 il_cmd_queue_reclaim(struct il_priv *il, struct il_tx_queue *txq, int idx)
 {
 	struct il_queue *q = &txq->q;
-	int nfreed = 0;
+	int nfreed, end;
 
-	if (idx >= q->n_bd || il_queue_used(q, idx) == 0) {
-		IL_ERR("Read idx for command queue txq id (%d), idx %d, "
-		       "is out of range [0-%d] %d %d.\n", IL_CMD_QUEUE, idx,
-		       q->n_bd, q->write_ptr, q->read_ptr);
+	if (IL_WARN_OUT_OF_RANGE(il, txq, idx))
 		return;
-	}
 
-	for (idx = il_queue_inc_wrap(idx, q->n_bd); q->read_ptr != idx;
-	     q->read_ptr = il_queue_inc_wrap(q->read_ptr, q->n_bd)) {
+	end = il_txq_inc(idx);
+	nfreed = 0;
 
+	while (q->read_ptr != idx) {
 		if (nfreed++ > 0) {
-			IL_ERR("HCMD skipped: idx (%d) %d %d\n", idx,
-			       q->write_ptr, q->read_ptr);
+			IL_ERR("HCMD skipped: idx (%d) %d %d\n",
+			       idx, q->write_ptr, q->read_ptr);
 			queue_work(il->workqueue, &il->restart);
 		}
-
+		q->read_ptr = il_txq_inc(q->read_ptr);
 	}
 }
 

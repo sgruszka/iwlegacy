@@ -1649,7 +1649,7 @@ il4965_tx_skb(struct il_priv *il,
 				       PCI_DMA_BIDIRECTIONAL);
 
 	/* Tell device the write idx *just past* this latest filled TFD */
-	q->write_ptr = il_queue_inc_wrap(q->write_ptr, q->n_bd);
+	q->write_ptr = il_txq_inc(q->write_ptr);
 	il_txq_update_wptr(il, txq);
 
 	spin_unlock(&il->lock);
@@ -1723,13 +1723,10 @@ il4965_hw_txq_ctx_free(struct il_priv *il)
 	/* Tx queues */
 	if (il->txq) {
 		for (txq_id = 0; txq_id < il->hw_params.max_txq_num; txq_id++)
-			if (txq_id == IL_CMD_QUEUE)
-				il_cmd_queue_free(il);
-			else
 				il_tx_queue_free(il, txq_id);
 	}
-	il4965_free_dma_ptr(il, &il->kw);
 
+	il4965_free_dma_ptr(il, &il->kw);
 	il4965_free_dma_ptr(il, &il->scd_bc_tbls);
 
 	/* free tx queue structure */
@@ -2219,20 +2216,17 @@ il4965_tx_queue_reclaim(struct il_priv *il, int txq_id, int idx,
 {
 	struct il_tx_queue *txq = &il->txq[txq_id];
 	struct il_queue *q = &txq->q;
-	int nfreed = 0;
+	int nfreed, end;
 	struct ieee80211_hdr *hdr;
 	struct sk_buff *skb;
 
-	if (idx >= q->n_bd || il_queue_used(q, idx) == 0) {
-		IL_ERR("Read idx for DMA queue txq id (%d), idx %d, "
-		       "is out of range [0-%d] %d %d.\n", txq_id, idx, q->n_bd,
-		       q->write_ptr, q->read_ptr);
+	if (IL_WARN_OUT_OF_RANGE(il, txq, idx))
 		return 0;
-	}
 
-	for (idx = il_queue_inc_wrap(idx, q->n_bd); q->read_ptr != idx;
-	     q->read_ptr = il_queue_inc_wrap(q->read_ptr, q->n_bd)) {
+	end = il_txq_inc(idx);
+	nfreed = 0;
 
+	while (q->read_ptr != end) {
 		skb = txq->skbs[txq->q.read_ptr];
 		txq->skbs[txq->q.read_ptr] = NULL;
 
@@ -2248,6 +2242,8 @@ il4965_tx_queue_reclaim(struct il_priv *il, int txq_id, int idx,
 
 		__skb_queue_tail(reclaim_skbs, skb);
 		il->ops->txq_free_tfd(il, txq);
+
+		q->read_ptr = il_txq_inc(q->read_ptr);
 	}
 
 	return nfreed;
@@ -2536,12 +2532,8 @@ il4965_hdl_tx(struct il_priv *il, struct il_rx_pkt *pkt)
 	u8 *qc = NULL;
 	struct sk_buff_head freed_skbs;
 
-	if (idx >= txq->q.n_bd || il_queue_used(&txq->q, idx) == 0) {
-		IL_ERR("Read idx for DMA queue txq_id (%d) idx %d "
-		       "is out of range [0-%d] %d %d\n", txq_id, idx,
-		       txq->q.n_bd, txq->q.write_ptr, txq->q.read_ptr);
+	if (IL_WARN_OUT_OF_RANGE(il, txq, idx))
 		return;
-	}
 
 	txq->time_stamp = jiffies;
 
@@ -2595,7 +2587,7 @@ il4965_hdl_tx(struct il_priv *il, struct il_rx_pkt *pkt)
 			info->flags |= IEEE80211_TX_STAT_AMPDU_NO_BACK;
 
 		if (txq->q.read_ptr != (scd_ssn & 0xff)) {
-			idx = il_queue_dec_wrap(scd_ssn & 0xff, txq->q.n_bd);
+			idx = il_txq_dec(scd_ssn & 0xff);
 			D_TX_REPLY("Retry scheduler reclaim scd_ssn "
 				   "%d idx %d\n", scd_ssn, idx);
 			freed = il4965_tx_queue_reclaim(il, txq_id, idx,
@@ -2720,7 +2712,7 @@ il4965_hdl_compressed_ba(struct il_priv *il, struct il_rx_pkt *pkt)
 	}
 
 	/* Find idx just before block-ack win */
-	idx = il_queue_dec_wrap(ba_resp_scd_ssn & 0xff, txq->q.n_bd);
+	idx = il_txq_dec(ba_resp_scd_ssn & 0xff);
 
 	__skb_queue_head_init(&freed_skbs);
 
