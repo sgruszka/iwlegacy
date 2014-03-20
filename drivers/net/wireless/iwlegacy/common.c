@@ -1271,8 +1271,13 @@ il_send_scan_abort(struct il_priv *il)
 	struct il_rx_pkt *pkt;
 	struct il_host_cmd cmd = {
 		.id = C_SCAN_ABORT,
-		.flags = CMD_WANT_SKB,
+		.flags = CMD_COPY_PKT,
 	};
+
+	pkt = kmalloc(sizeof(*pkt), GFP_KERNEL);
+	if (!pkt)
+		return -ENOMEM;
+	cmd.pkt_ptr = pkt;
 
 	/* Exit instantly with error when device is not ready
 	 * to receive scan abort command or it does not perform
@@ -1281,14 +1286,15 @@ il_send_scan_abort(struct il_priv *il)
 	    !test_bit(S_GEO_CONFIGURED, &il->status) ||
 	    !test_bit(S_SCAN_HW, &il->status) ||
 	    test_bit(S_FW_ERROR, &il->status) ||
-	    test_bit(S_EXIT_PENDING, &il->status))
-		return -EIO;
+	    test_bit(S_EXIT_PENDING, &il->status)) {
+		ret = -EIO;
+		goto out;
+	}
 
 	ret = il_send_cmd_sync(il, &cmd);
 	if (ret)
-		return ret;
+		goto out;
 
-	pkt = (struct il_rx_pkt *)cmd.reply_page;
 	if (pkt->u.status != CAN_ABORT_STATUS) {
 		/* The scan abort will return 1 for success or
 		 * 2 for "failure".  A failure condition can be
@@ -1300,7 +1306,8 @@ il_send_scan_abort(struct il_priv *il)
 		ret = -EIO;
 	}
 
-	il_free_pages(il, cmd.reply_page);
+out:
+	kfree(pkt);
 	return ret;
 }
 
