@@ -27,8 +27,7 @@
  *  for more details.
  *
  *  You should have received a copy of the GNU General Public License along
- *  with this program; if not, write to the Free Software Foundation, Inc.,
- *  59 Temple Place - Suite 330, Boston MA 02111-1307, USA.
+ *  with this program; if not, see <http://www.gnu.org/licenses/>.
  *
  * ########################################################################
  *
@@ -48,7 +47,6 @@
 #include <linux/bitops.h>
 #include <linux/slab.h>
 #include <linux/interrupt.h>
-#include <linux/init.h>
 #include <linux/netdevice.h>
 #include <linux/etherdevice.h>
 #include <linux/ethtool.h>
@@ -437,8 +435,8 @@ static int au1000_mii_probe(struct net_device *dev)
 	/* now we are supposed to have a proper phydev, to attach to... */
 	BUG_ON(phydev->attached_dev);
 
-	phydev = phy_connect(dev, dev_name(&phydev->dev), &au1000_adjust_link,
-			0, PHY_INTERFACE_MODE_MII);
+	phydev = phy_connect(dev, dev_name(&phydev->dev),
+			     &au1000_adjust_link, PHY_INTERFACE_MODE_MII);
 
 	if (IS_ERR(phydev)) {
 		netdev_err(dev, "Could not attach to PHY\n");
@@ -541,19 +539,17 @@ static void au1000_reset_mac(struct net_device *dev)
  * these are not descriptors sitting in memory.
  */
 static void
-au1000_setup_hw_rings(struct au1000_private *aup, u32 rx_base, u32 tx_base)
+au1000_setup_hw_rings(struct au1000_private *aup, void __iomem *tx_base)
 {
 	int i;
 
 	for (i = 0; i < NUM_RX_DMA; i++) {
-		aup->rx_dma_ring[i] =
-			(struct rx_dma *)
-					(rx_base + sizeof(struct rx_dma)*i);
+		aup->rx_dma_ring[i] = (struct rx_dma *)
+			(tx_base + 0x100 + sizeof(struct rx_dma) * i);
 	}
 	for (i = 0; i < NUM_TX_DMA; i++) {
-		aup->tx_dma_ring[i] =
-			(struct tx_dma *)
-					(tx_base + sizeof(struct tx_dma)*i);
+		aup->tx_dma_ring[i] = (struct tx_dma *)
+			(tx_base + sizeof(struct tx_dma) * i);
 	}
 }
 
@@ -589,10 +585,10 @@ au1000_get_drvinfo(struct net_device *dev, struct ethtool_drvinfo *info)
 {
 	struct au1000_private *aup = netdev_priv(dev);
 
-	strcpy(info->driver, DRV_NAME);
-	strcpy(info->version, DRV_VERSION);
-	info->fw_version[0] = '\0';
-	sprintf(info->bus_info, "%s %d", DRV_NAME, aup->mac_id);
+	strlcpy(info->driver, DRV_NAME, sizeof(info->driver));
+	strlcpy(info->version, DRV_VERSION, sizeof(info->version));
+	snprintf(info->bus_info, sizeof(info->bus_info), "%s %d", DRV_NAME,
+		 aup->mac_id);
 	info->regdump_len = 0;
 }
 
@@ -727,9 +723,8 @@ static int au1000_rx(struct net_device *dev)
 			/* good frame */
 			frmlen = (status & RX_FRAME_LEN_MASK);
 			frmlen -= 4; /* Remove FCS */
-			skb = dev_alloc_skb(frmlen + 2);
+			skb = netdev_alloc_skb(dev, frmlen + 2);
 			if (skb == NULL) {
-				netdev_err(dev, "Memory squeeze, dropping packet.\n");
 				dev->stats.rx_dropped++;
 				continue;
 			}
@@ -1018,7 +1013,7 @@ static const struct net_device_ops au1000_netdev_ops = {
 	.ndo_change_mtu		= eth_change_mtu,
 };
 
-static int __devinit au1000_probe(struct platform_device *pdev)
+static int au1000_probe(struct platform_device *pdev)
 {
 	static unsigned version_printed;
 	struct au1000_private *aup = NULL;
@@ -1026,7 +1021,7 @@ static int __devinit au1000_probe(struct platform_device *pdev)
 	struct net_device *dev = NULL;
 	struct db_dest *pDB, *pDBfree;
 	int irq, i, err = 0;
-	struct resource *base, *macen;
+	struct resource *base, *macen, *macdma;
 
 	base = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	if (!base) {
@@ -1049,6 +1044,13 @@ static int __devinit au1000_probe(struct platform_device *pdev)
 		goto out;
 	}
 
+	macdma = platform_get_resource(pdev, IORESOURCE_MEM, 2);
+	if (!macdma) {
+		dev_err(&pdev->dev, "failed to retrieve MACDMA registers\n");
+		err = -ENODEV;
+		goto out;
+	}
+
 	if (!request_mem_region(base->start, resource_size(base),
 							pdev->name)) {
 		dev_err(&pdev->dev, "failed to request memory region for base registers\n");
@@ -1063,9 +1065,15 @@ static int __devinit au1000_probe(struct platform_device *pdev)
 		goto err_request;
 	}
 
+	if (!request_mem_region(macdma->start, resource_size(macdma),
+							pdev->name)) {
+		dev_err(&pdev->dev, "failed to request MACDMA memory region\n");
+		err = -ENXIO;
+		goto err_macdma;
+	}
+
 	dev = alloc_etherdev(sizeof(struct au1000_private));
 	if (!dev) {
-		dev_err(&pdev->dev, "alloc_etherdev failed\n");
 		err = -ENOMEM;
 		goto err_alloc;
 	}
@@ -1109,25 +1117,30 @@ static int __devinit au1000_probe(struct platform_device *pdev)
 	}
 	aup->mac_id = pdev->id;
 
-	if (pdev->id == 0)
-		au1000_setup_hw_rings(aup, MAC0_RX_DMA_ADDR, MAC0_TX_DMA_ADDR);
-	else if (pdev->id == 1)
-		au1000_setup_hw_rings(aup, MAC1_RX_DMA_ADDR, MAC1_TX_DMA_ADDR);
+	aup->macdma = ioremap_nocache(macdma->start, resource_size(macdma));
+	if (!aup->macdma) {
+		dev_err(&pdev->dev, "failed to ioremap MACDMA registers\n");
+		err = -ENXIO;
+		goto err_remap3;
+	}
 
-	/* set a random MAC now in case platform_data doesn't provide one */
-	random_ether_addr(dev->dev_addr);
+	au1000_setup_hw_rings(aup, aup->macdma);
 
 	writel(0, aup->enable);
 	aup->mac_enabled = 0;
 
-	pd = pdev->dev.platform_data;
+	pd = dev_get_platdata(&pdev->dev);
 	if (!pd) {
 		dev_info(&pdev->dev, "no platform_data passed,"
 					" PHY search on MAC0\n");
 		aup->phy1_search_mac0 = 1;
 	} else {
-		if (is_valid_ether_addr(pd->mac))
-			memcpy(dev->dev_addr, pd->mac, 6);
+		if (is_valid_ether_addr(pd->mac)) {
+			memcpy(dev->dev_addr, pd->mac, ETH_ALEN);
+		} else {
+			/* Set a random MAC since no valid provided by platform_data. */
+			eth_hw_addr_random(dev);
+		}
 
 		aup->phy_static_config = pd->phy_static_config;
 		aup->phy_search_highest_addr = pd->phy_search_highest_addr;
@@ -1155,10 +1168,13 @@ static int __devinit au1000_probe(struct platform_device *pdev)
 	aup->mii_bus->write = au1000_mdiobus_write;
 	aup->mii_bus->reset = au1000_mdiobus_reset;
 	aup->mii_bus->name = "au1000_eth_mii";
-	snprintf(aup->mii_bus->id, MII_BUS_ID_SIZE, "%x", aup->mac_id);
+	snprintf(aup->mii_bus->id, MII_BUS_ID_SIZE, "%s-%x",
+		pdev->name, aup->mac_id);
 	aup->mii_bus->irq = kmalloc(sizeof(int)*PHY_MAX_ADDR, GFP_KERNEL);
-	if (aup->mii_bus->irq == NULL)
+	if (aup->mii_bus->irq == NULL) {
+		err = -ENOMEM;
 		goto err_out;
+	}
 
 	for (i = 0; i < PHY_MAX_ADDR; ++i)
 		aup->mii_bus->irq[i] = PHY_POLL;
@@ -1173,7 +1189,8 @@ static int __devinit au1000_probe(struct platform_device *pdev)
 		goto err_mdiobus_reg;
 	}
 
-	if (au1000_mii_probe(dev) != 0)
+	err = au1000_mii_probe(dev);
+	if (err != 0)
 		goto err_out;
 
 	pDBfree = NULL;
@@ -1188,6 +1205,7 @@ static int __devinit au1000_probe(struct platform_device *pdev)
 	}
 	aup->pDBfree = pDBfree;
 
+	err = -ENODEV;
 	for (i = 0; i < NUM_RX_DMA; i++) {
 		pDB = au1000_GetFreeDB(aup);
 		if (!pDB)
@@ -1196,6 +1214,8 @@ static int __devinit au1000_probe(struct platform_device *pdev)
 		aup->rx_dma_ring[i]->buff_stat = (unsigned)pDB->dma_addr;
 		aup->rx_db_inuse[i] = pDB;
 	}
+
+	err = -ENODEV;
 	for (i = 0; i < NUM_TX_DMA; i++) {
 		pDB = au1000_GetFreeDB(aup);
 		if (!pDB)
@@ -1252,6 +1272,8 @@ err_out:
 err_mdiobus_reg:
 	mdiobus_free(aup->mii_bus);
 err_mdiobus_alloc:
+	iounmap(aup->macdma);
+err_remap3:
 	iounmap(aup->enable);
 err_remap2:
 	iounmap(aup->mac);
@@ -1261,6 +1283,8 @@ err_remap1:
 err_vaddr:
 	free_netdev(dev);
 err_alloc:
+	release_mem_region(macdma->start, resource_size(macdma));
+err_macdma:
 	release_mem_region(macen->start, resource_size(macen));
 err_request:
 	release_mem_region(base->start, resource_size(base));
@@ -1268,14 +1292,12 @@ out:
 	return err;
 }
 
-static int __devexit au1000_remove(struct platform_device *pdev)
+static int au1000_remove(struct platform_device *pdev)
 {
 	struct net_device *dev = platform_get_drvdata(pdev);
 	struct au1000_private *aup = netdev_priv(dev);
 	int i;
 	struct resource *base, *macen;
-
-	platform_set_drvdata(pdev, NULL);
 
 	unregister_netdev(dev);
 	mdiobus_unregister(aup->mii_bus);
@@ -1293,8 +1315,12 @@ static int __devexit au1000_remove(struct platform_device *pdev)
 			(NUM_TX_BUFFS + NUM_RX_BUFFS),
 			(void *)aup->vaddr, aup->dma_addr);
 
+	iounmap(aup->macdma);
 	iounmap(aup->mac);
 	iounmap(aup->enable);
+
+	base = platform_get_resource(pdev, IORESOURCE_MEM, 2);
+	release_mem_region(base->start, resource_size(base));
 
 	base = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	release_mem_region(base->start, resource_size(base));
@@ -1309,24 +1335,13 @@ static int __devexit au1000_remove(struct platform_device *pdev)
 
 static struct platform_driver au1000_eth_driver = {
 	.probe  = au1000_probe,
-	.remove = __devexit_p(au1000_remove),
+	.remove = au1000_remove,
 	.driver = {
 		.name   = "au1000-eth",
 		.owner  = THIS_MODULE,
 	},
 };
+
+module_platform_driver(au1000_eth_driver);
+
 MODULE_ALIAS("platform:au1000-eth");
-
-
-static int __init au1000_init_module(void)
-{
-	return platform_driver_register(&au1000_eth_driver);
-}
-
-static void __exit au1000_exit_module(void)
-{
-	platform_driver_unregister(&au1000_eth_driver);
-}
-
-module_init(au1000_init_module);
-module_exit(au1000_exit_module);

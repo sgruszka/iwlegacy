@@ -15,7 +15,7 @@
 #include <linux/delay.h>
 #include <linux/device.h>
 #include <linux/mmc/host.h>
-#include <mach/cns3xxx.h>
+#include <linux/module.h>
 #include "sdhci-pltfm.h"
 
 static unsigned int sdhci_cns3xxx_get_max_clk(struct sdhci_host *host)
@@ -79,12 +79,12 @@ out:
 	host->clock = clock;
 }
 
-static struct sdhci_ops sdhci_cns3xxx_ops = {
+static const struct sdhci_ops sdhci_cns3xxx_ops = {
 	.get_max_clock	= sdhci_cns3xxx_get_max_clk,
 	.set_clock	= sdhci_cns3xxx_set_clock,
 };
 
-static struct sdhci_pltfm_data sdhci_cns3xxx_pdata = {
+static const struct sdhci_pltfm_data sdhci_cns3xxx_pdata = {
 	.ops = &sdhci_cns3xxx_ops,
 	.quirks = SDHCI_QUIRK_BROKEN_DMA |
 		  SDHCI_QUIRK_DATA_TIMEOUT_USES_SDCLK |
@@ -94,12 +94,12 @@ static struct sdhci_pltfm_data sdhci_cns3xxx_pdata = {
 		  SDHCI_QUIRK_NONSTANDARD_CLOCK,
 };
 
-static int __devinit sdhci_cns3xxx_probe(struct platform_device *pdev)
+static int sdhci_cns3xxx_probe(struct platform_device *pdev)
 {
-	return sdhci_pltfm_register(pdev, &sdhci_cns3xxx_pdata);
+	return sdhci_pltfm_register(pdev, &sdhci_cns3xxx_pdata, 0);
 }
 
-static int __devexit sdhci_cns3xxx_remove(struct platform_device *pdev)
+static int sdhci_cns3xxx_remove(struct platform_device *pdev)
 {
 	return sdhci_pltfm_unregister(pdev);
 }
@@ -108,26 +108,13 @@ static struct platform_driver sdhci_cns3xxx_driver = {
 	.driver		= {
 		.name	= "sdhci-cns3xxx",
 		.owner	= THIS_MODULE,
+		.pm	= SDHCI_PLTFM_PMOPS,
 	},
 	.probe		= sdhci_cns3xxx_probe,
-	.remove		= __devexit_p(sdhci_cns3xxx_remove),
-#ifdef CONFIG_PM
-	.suspend	= sdhci_pltfm_suspend,
-	.resume		= sdhci_pltfm_resume,
-#endif
+	.remove		= sdhci_cns3xxx_remove,
 };
 
-static int __init sdhci_cns3xxx_init(void)
-{
-	return platform_driver_register(&sdhci_cns3xxx_driver);
-}
-module_init(sdhci_cns3xxx_init);
-
-static void __exit sdhci_cns3xxx_exit(void)
-{
-	platform_driver_unregister(&sdhci_cns3xxx_driver);
-}
-module_exit(sdhci_cns3xxx_exit);
+module_platform_driver(sdhci_cns3xxx_driver);
 
 MODULE_DESCRIPTION("SDHCI driver for CNS3xxx");
 MODULE_AUTHOR("Scott Shu, "

@@ -63,6 +63,7 @@
 
 #define MaxFault	50
 #include <linux/blkdev.h>
+#include <linux/module.h>
 #include <linux/raid/md_u.h>
 #include <linux/slab.h>
 #include "md.h"
@@ -73,8 +74,8 @@ static void faulty_fail(struct bio *bio, int error)
 {
 	struct bio *b = bio->bi_private;
 
-	b->bi_size = bio->bi_size;
-	b->bi_sector = bio->bi_sector;
+	b->bi_iter.bi_size = bio->bi_iter.bi_size;
+	b->bi_iter.bi_sector = bio->bi_iter.bi_sector;
 
 	bio_put(bio);
 
@@ -169,7 +170,7 @@ static void add_sector(struct faulty_conf *conf, sector_t start, int mode)
 		conf->nfaults = n+1;
 }
 
-static int make_request(struct mddev *mddev, struct bio *bio)
+static void make_request(struct mddev *mddev, struct bio *bio)
 {
 	struct faulty_conf *conf = mddev->private;
 	int failit = 0;
@@ -181,45 +182,48 @@ static int make_request(struct mddev *mddev, struct bio *bio)
 			 * just fail immediately
 			 */
 			bio_endio(bio, -EIO);
-			return 0;
+			return;
 		}
 
-		if (check_sector(conf, bio->bi_sector, bio->bi_sector+(bio->bi_size>>9),
-				 WRITE))
+		if (check_sector(conf, bio->bi_iter.bi_sector,
+				 bio_end_sector(bio), WRITE))
 			failit = 1;
 		if (check_mode(conf, WritePersistent)) {
-			add_sector(conf, bio->bi_sector, WritePersistent);
+			add_sector(conf, bio->bi_iter.bi_sector,
+				   WritePersistent);
 			failit = 1;
 		}
 		if (check_mode(conf, WriteTransient))
 			failit = 1;
 	} else {
 		/* read request */
-		if (check_sector(conf, bio->bi_sector, bio->bi_sector + (bio->bi_size>>9),
-				 READ))
+		if (check_sector(conf, bio->bi_iter.bi_sector,
+				 bio_end_sector(bio), READ))
 			failit = 1;
 		if (check_mode(conf, ReadTransient))
 			failit = 1;
 		if (check_mode(conf, ReadPersistent)) {
-			add_sector(conf, bio->bi_sector, ReadPersistent);
+			add_sector(conf, bio->bi_iter.bi_sector,
+				   ReadPersistent);
 			failit = 1;
 		}
 		if (check_mode(conf, ReadFixable)) {
-			add_sector(conf, bio->bi_sector, ReadFixable);
+			add_sector(conf, bio->bi_iter.bi_sector,
+				   ReadFixable);
 			failit = 1;
 		}
 	}
 	if (failit) {
 		struct bio *b = bio_clone_mddev(bio, GFP_NOIO, mddev);
+
 		b->bi_bdev = conf->rdev->bdev;
 		b->bi_private = bio;
 		b->bi_end_io = faulty_fail;
-		generic_make_request(b);
-		return 0;
-	} else {
+		bio = b;
+	} else
 		bio->bi_bdev = conf->rdev->bdev;
-		return 1;
-	}
+
+	generic_make_request(bio);
 }
 
 static void status(struct seq_file *seq, struct mddev *mddev)
@@ -314,8 +318,11 @@ static int run(struct mddev *mddev)
 	}
 	conf->nfaults = 0;
 
-	list_for_each_entry(rdev, &mddev->disks, same_set)
+	rdev_for_each(rdev, mddev) {
 		conf->rdev = rdev;
+		disk_stack_limits(mddev->gendisk, rdev->bdev,
+				  rdev->data_offset << 9);
+	}
 
 	md_set_array_sectors(mddev, faulty_size(mddev, 0, 0));
 	mddev->private = conf;

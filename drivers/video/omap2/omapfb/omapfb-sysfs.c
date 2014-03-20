@@ -30,7 +30,7 @@
 #include <linux/omapfb.h>
 
 #include <video/omapdss.h>
-#include <plat/vrfb.h>
+#include <video/omapvrfb.h>
 
 #include "omapfb.h"
 
@@ -104,15 +104,13 @@ static ssize_t store_mirror(struct device *dev,
 {
 	struct fb_info *fbi = dev_get_drvdata(dev);
 	struct omapfb_info *ofbi = FB2OFB(fbi);
-	int mirror;
+	bool mirror;
 	int r;
 	struct fb_var_screeninfo new_var;
 
-	r = kstrtoint(buf, 0, &mirror);
+	r = strtobool(buf, &mirror);
 	if (r)
 		return r;
-
-	mirror = !!mirror;
 
 	if (!lock_fb_info(fbi))
 		return -ENODEV;
@@ -443,6 +441,7 @@ static ssize_t store_size(struct device *dev, struct device_attribute *attr,
 	struct fb_info *fbi = dev_get_drvdata(dev);
 	struct omapfb_info *ofbi = FB2OFB(fbi);
 	struct omapfb2_device *fbdev = ofbi->fbdev;
+	struct omap_dss_device *display = fb2display(fbi);
 	struct omapfb2_mem_region *rg;
 	unsigned long size;
 	int r;
@@ -456,6 +455,9 @@ static ssize_t store_size(struct device *dev, struct device_attribute *attr,
 
 	if (!lock_fb_info(fbi))
 		return -ENODEV;
+
+	if (display && display->driver->sync)
+		display->driver->sync(display);
 
 	rg = ofbi->region;
 
@@ -475,7 +477,9 @@ static ssize_t store_size(struct device *dev, struct device_attribute *attr,
 			continue;
 
 		for (j = 0; j < ofbi2->num_overlays; j++) {
-			if (ofbi2->overlays[j]->info.enabled) {
+			struct omap_overlay *ovl;
+			ovl = ofbi2->overlays[j];
+			if (ovl->is_enabled(ovl)) {
 				r = -EBUSY;
 				goto out;
 			}

@@ -166,6 +166,7 @@
 #define DA830_LPSC1_McASP1		8
 #define DA850_LPSC1_SATA		8
 #define DA830_LPSC1_McASP2		9
+#define DA850_LPSC1_VPIF		9
 #define DA8XX_LPSC1_SPI1		10
 #define DA8XX_LPSC1_I2C			11
 #define DA8XX_LPSC1_UART1		12
@@ -233,7 +234,7 @@
 #define PTCMD		0x120
 #define PTSTAT		0x128
 #define PDSTAT		0x200
-#define PDCTL1		0x304
+#define PDCTL		0x300
 #define MDSTAT		0x800
 #define MDCTL		0xA00
 
@@ -244,11 +245,17 @@
 #define PSC_STATE_ENABLE	3
 
 #define MDSTAT_STATE_MASK	0x3f
+#define PDSTAT_STATE_MASK	0x1f
+#define MDCTL_LRST		BIT(8)
 #define MDCTL_FORCE		BIT(31)
+#define PDCTL_NEXT		BIT(0)
+#define PDCTL_EPCGOOD		BIT(8)
 
 #ifndef __ASSEMBLER__
 
 extern int davinci_psc_is_clk_active(unsigned int ctlr, unsigned int id);
+extern void davinci_psc_reset(unsigned int ctlr, unsigned int id,
+		bool reset);
 extern void davinci_psc_config(unsigned int domain, unsigned int ctlr,
 		unsigned int id, bool enable, u32 flags);
 

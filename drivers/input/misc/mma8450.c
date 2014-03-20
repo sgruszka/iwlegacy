@@ -88,23 +88,19 @@ static int mma8450_write(struct mma8450 *m, unsigned off, u8 v)
 	return 0;
 }
 
-static int mma8450_read_xyz(struct mma8450 *m, int *x, int *y, int *z)
+static int mma8450_read_block(struct mma8450 *m, unsigned off,
+			      u8 *buf, size_t size)
 {
 	struct i2c_client *c = m->client;
-	u8 buff[6];
 	int err;
 
-	err = i2c_smbus_read_i2c_block_data(c, MMA8450_OUT_X_LSB, 6, buff);
+	err = i2c_smbus_read_i2c_block_data(c, off, size, buf);
 	if (err < 0) {
 		dev_err(&c->dev,
 			"failed to read block data at 0x%02x, error %d\n",
 			MMA8450_OUT_X_LSB, err);
 		return err;
 	}
-
-	*x = ((buff[1] << 4) & 0xff0) | (buff[0] & 0xf);
-	*y = ((buff[3] << 4) & 0xff0) | (buff[2] & 0xf);
-	*z = ((buff[5] << 4) & 0xff0) | (buff[4] & 0xf);
 
 	return 0;
 }
@@ -114,7 +110,7 @@ static void mma8450_poll(struct input_polled_dev *dev)
 	struct mma8450 *m = dev->private;
 	int x, y, z;
 	int ret;
-	int err;
+	u8 buf[6];
 
 	ret = mma8450_read(m, MMA8450_STATUS);
 	if (ret < 0)
@@ -123,9 +119,13 @@ static void mma8450_poll(struct input_polled_dev *dev)
 	if (!(ret & MMA8450_STATUS_ZXYDR))
 		return;
 
-	err = mma8450_read_xyz(m, &x, &y, &z);
-	if (err)
+	ret = mma8450_read_block(m, MMA8450_OUT_X_LSB, buf, sizeof(buf));
+	if (ret < 0)
 		return;
+
+	x = ((int)(s8)buf[1] << 4) | (buf[0] & 0xf);
+	y = ((int)(s8)buf[3] << 4) | (buf[2] & 0xf);
+	z = ((int)(s8)buf[5] << 4) | (buf[4] & 0xf);
 
 	input_report_abs(dev->input, ABS_X, x);
 	input_report_abs(dev->input, ABS_Y, y);
@@ -167,8 +167,8 @@ static void mma8450_close(struct input_polled_dev *dev)
 /*
  * I2C init/probing/exit functions
  */
-static int __devinit mma8450_probe(struct i2c_client *c,
-				   const struct i2c_device_id *id)
+static int mma8450_probe(struct i2c_client *c,
+			 const struct i2c_device_id *id)
 {
 	struct input_polled_dev *idev;
 	struct mma8450 *m;
@@ -204,6 +204,8 @@ static int __devinit mma8450_probe(struct i2c_client *c,
 		goto err_free_mem;
 	}
 
+	i2c_set_clientdata(c, m);
+
 	return 0;
 
 err_free_mem:
@@ -212,7 +214,7 @@ err_free_mem:
 	return err;
 }
 
-static int __devexit mma8450_remove(struct i2c_client *c)
+static int mma8450_remove(struct i2c_client *c)
 {
 	struct mma8450 *m = i2c_get_clientdata(c);
 	struct input_polled_dev *idev = m->idev;
@@ -243,21 +245,11 @@ static struct i2c_driver mma8450_driver = {
 		.of_match_table = mma8450_dt_ids,
 	},
 	.probe		= mma8450_probe,
-	.remove		= __devexit_p(mma8450_remove),
+	.remove		= mma8450_remove,
 	.id_table	= mma8450_id,
 };
 
-static int __init mma8450_init(void)
-{
-	return i2c_add_driver(&mma8450_driver);
-}
-module_init(mma8450_init);
-
-static void __exit mma8450_exit(void)
-{
-	i2c_del_driver(&mma8450_driver);
-}
-module_exit(mma8450_exit);
+module_i2c_driver(mma8450_driver);
 
 MODULE_AUTHOR("Freescale Semiconductor, Inc.");
 MODULE_DESCRIPTION("MMA8450 3-Axis Accelerometer Driver");

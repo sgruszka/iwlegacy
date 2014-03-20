@@ -38,6 +38,9 @@
 #include <rdma/ib_mad.h>
 #include <rdma/ib_sa.h>
 
+/* ib_cm and ib_user_cm modules share /sys/class/infiniband_cm */
+extern struct class cm_class;
+
 enum ib_cm_state {
 	IB_CM_IDLE,
 	IB_CM_LISTEN,
@@ -258,6 +261,18 @@ struct ib_cm_event {
 
 	void			*private_data;
 };
+
+#define CM_REQ_ATTR_ID		cpu_to_be16(0x0010)
+#define CM_MRA_ATTR_ID		cpu_to_be16(0x0011)
+#define CM_REJ_ATTR_ID		cpu_to_be16(0x0012)
+#define CM_REP_ATTR_ID		cpu_to_be16(0x0013)
+#define CM_RTU_ATTR_ID		cpu_to_be16(0x0014)
+#define CM_DREQ_ATTR_ID		cpu_to_be16(0x0015)
+#define CM_DREP_ATTR_ID		cpu_to_be16(0x0016)
+#define CM_SIDR_REQ_ATTR_ID	cpu_to_be16(0x0017)
+#define CM_SIDR_REP_ATTR_ID	cpu_to_be16(0x0018)
+#define CM_LAP_ATTR_ID		cpu_to_be16(0x0019)
+#define CM_APR_ATTR_ID		cpu_to_be16(0x001A)
 
 /**
  * ib_cm_handler - User-defined callback to process communication events.
@@ -586,4 +601,5 @@ struct ib_cm_sidr_rep_param {
 int ib_send_cm_sidr_rep(struct ib_cm_id *cm_id,
 			struct ib_cm_sidr_rep_param *param);
 
+int ib_update_cm_av(struct ib_cm_id *id, const u8 *smac, const u8 *alt_smac);
 #endif /* IB_CM_H */

@@ -25,12 +25,13 @@
 
 #include <linux/types.h>
 #include <linux/list.h>
-#include <linux/module.h>
 #include <linux/atomic.h>
 #include <linux/if.h>
 #include <linux/skbuff.h>
 #include <linux/ieee80211.h>
 #include <linux/timer.h>
+#include <linux/seq_file.h>
+
 /* print_ssid() is intended to be used in debug (and possibly error)
  * messages. It should never be used for passing ssid to user space. */
 const char *print_ssid(char *buf, const char *ssid, u8 ssid_len);
@@ -41,6 +42,8 @@ const char *print_ssid(char *buf, const char *ssid, u8 ssid_len);
 enum {
 	IEEE80211_CRYPTO_TKIP_COUNTERMEASURES = (1 << 0),
 };
+
+struct module;
 
 struct lib80211_crypto_ops {
 	const char *name;
@@ -74,7 +77,7 @@ struct lib80211_crypto_ops {
 
 	/* procfs handler for printing out key information and possible
 	 * statistics */
-	char *(*print_stats) (char *p, void *priv);
+	void (*print_stats) (struct seq_file *m, void *priv);
 
 	/* Crypto specific flag get/set for configuration settings */
 	unsigned long (*get_flags) (void *priv);

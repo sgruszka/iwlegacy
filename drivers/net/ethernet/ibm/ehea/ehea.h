@@ -1,5 +1,5 @@
 /*
- *  linux/drivers/net/ehea/ehea.h
+ *  linux/drivers/net/ethernet/ibm/ehea/ehea.h
  *
  *  eHEA ethernet device driver for IBM eServer System p
  *
@@ -35,7 +35,6 @@
 #include <linux/if_vlan.h>
 
 #include <asm/ibmebus.h>
-#include <asm/abs_addr.h>
 #include <asm/io.h>
 
 #define DRV_NAME	"ehea"
@@ -61,9 +60,9 @@
 #ifdef EHEA_SMALL_QUEUES
 #define EHEA_MAX_CQE_COUNT      1023
 #define EHEA_DEF_ENTRIES_SQ     1023
-#define EHEA_DEF_ENTRIES_RQ1    4095
+#define EHEA_DEF_ENTRIES_RQ1    1023
 #define EHEA_DEF_ENTRIES_RQ2    1023
-#define EHEA_DEF_ENTRIES_RQ3    1023
+#define EHEA_DEF_ENTRIES_RQ3    511
 #else
 #define EHEA_MAX_CQE_COUNT      4080
 #define EHEA_DEF_ENTRIES_SQ     4080

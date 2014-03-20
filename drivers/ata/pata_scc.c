@@ -826,18 +826,6 @@ static unsigned int scc_data_xfer (struct ata_device *dev, unsigned char *buf,
 }
 
 /**
- *	scc_pata_prereset - prepare for reset
- *	@ap: ATA port to be reset
- *	@deadline: deadline jiffies for the operation
- */
-
-static int scc_pata_prereset(struct ata_link *link, unsigned long deadline)
-{
-	link->ap->cbl = ATA_CBL_PATA80;
-	return ata_sff_prereset(link, deadline);
-}
-
-/**
  *	scc_postreset - standard postreset callback
  *	@ap: the target ata_port
  *	@classes: classes of attached devices
@@ -946,7 +934,7 @@ static struct ata_port_operations scc_pata_ops = {
 	.bmdma_status		= scc_bmdma_status,
 	.sff_data_xfer		= scc_data_xfer,
 
-	.prereset		= scc_pata_prereset,
+	.cable_detect		= ata_cable_80wire,
 	.softreset		= scc_softreset,
 	.postreset		= scc_postreset,
 
@@ -1115,26 +1103,7 @@ static struct pci_driver scc_pci_driver = {
 #endif
 };
 
-static int __init scc_init (void)
-{
-	int rc;
-
-	DPRINTK("pci_register_driver\n");
-	rc = pci_register_driver(&scc_pci_driver);
-	if (rc)
-		return rc;
-
-	DPRINTK("done\n");
-	return 0;
-}
-
-static void __exit scc_exit (void)
-{
-	pci_unregister_driver(&scc_pci_driver);
-}
-
-module_init(scc_init);
-module_exit(scc_exit);
+module_pci_driver(scc_pci_driver);
 
 MODULE_AUTHOR("Toshiba corp");
 MODULE_DESCRIPTION("SCSI low-level driver for Toshiba SCC PATA controller");

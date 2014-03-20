@@ -223,21 +223,26 @@ static int i8042_flush(void)
 {
 	unsigned long flags;
 	unsigned char data, str;
-	int i = 0;
+	int count = 0;
+	int retval = 0;
 
 	spin_lock_irqsave(&i8042_lock, flags);
 
-	while (((str = i8042_read_status()) & I8042_STR_OBF) && (i < I8042_BUFFER_SIZE)) {
-		udelay(50);
-		data = i8042_read_data();
-		i++;
-		dbg("%02x <- i8042 (flush, %s)\n",
-		    data, str & I8042_STR_AUXDATA ? "aux" : "kbd");
+	while ((str = i8042_read_status()) & I8042_STR_OBF) {
+		if (count++ < I8042_BUFFER_SIZE) {
+			udelay(50);
+			data = i8042_read_data();
+			dbg("%02x <- i8042 (flush, %s)\n",
+			    data, str & I8042_STR_AUXDATA ? "aux" : "kbd");
+		} else {
+			retval = -EIO;
+			break;
+		}
 	}
 
 	spin_unlock_irqrestore(&i8042_lock, flags);
 
-	return i;
+	return retval;
 }
 
 /*
@@ -849,7 +854,7 @@ static int __init i8042_check_aux(void)
 
 static int i8042_controller_check(void)
 {
-	if (i8042_flush() == I8042_BUFFER_SIZE) {
+	if (i8042_flush()) {
 		pr_err("No controller found\n");
 		return -ENODEV;
 	}
@@ -991,7 +996,7 @@ static int i8042_controller_init(void)
  * Reset the controller and reset CRT to the original value set by BIOS.
  */
 
-static void i8042_controller_reset(void)
+static void i8042_controller_reset(bool force_reset)
 {
 	i8042_flush();
 
@@ -1016,7 +1021,7 @@ static void i8042_controller_reset(void)
  * Reset the controller if requested.
  */
 
-	if (i8042_reset)
+	if (i8042_reset || force_reset)
 		i8042_controller_selftest();
 
 /*
@@ -1031,7 +1036,7 @@ static void i8042_controller_reset(void)
 /*
  * i8042_panic_blink() will turn the keyboard LEDs on or off and is called
  * when kernel panics. Flashing LEDs is useful for users running X who may
- * not see the console and will help distingushing panics from "real"
+ * not see the console and will help distinguishing panics from "real"
  * lockups.
  *
  * Note that DELAY has a limit of 10ms so we will not get stuck here
@@ -1139,9 +1144,9 @@ static int i8042_controller_resume(bool force_reset)
  * upsetting it.
  */
 
-static int i8042_pm_reset(struct device *dev)
+static int i8042_pm_suspend(struct device *dev)
 {
-	i8042_controller_reset();
+	i8042_controller_reset(true);
 
 	return 0;
 }
@@ -1163,13 +1168,20 @@ static int i8042_pm_thaw(struct device *dev)
 	return 0;
 }
 
+static int i8042_pm_reset(struct device *dev)
+{
+	i8042_controller_reset(false);
+
+	return 0;
+}
+
 static int i8042_pm_restore(struct device *dev)
 {
 	return i8042_controller_resume(false);
 }
 
 static const struct dev_pm_ops i8042_pm_ops = {
-	.suspend	= i8042_pm_reset,
+	.suspend	= i8042_pm_suspend,
 	.resume		= i8042_pm_resume,
 	.thaw		= i8042_pm_thaw,
 	.poweroff	= i8042_pm_reset,
@@ -1185,7 +1197,7 @@ static const struct dev_pm_ops i8042_pm_ops = {
 
 static void i8042_shutdown(struct platform_device *dev)
 {
-	i8042_controller_reset();
+	i8042_controller_reset(false);
 }
 
 static int __init i8042_create_kbd_port(void)
@@ -1277,7 +1289,7 @@ static void __init i8042_register_ports(void)
 	}
 }
 
-static void __devexit i8042_unregister_ports(void)
+static void i8042_unregister_ports(void)
 {
 	int i;
 
@@ -1424,17 +1436,17 @@ static int __init i8042_probe(struct platform_device *dev)
  out_fail:
 	i8042_free_aux_ports();	/* in case KBD failed but AUX not */
 	i8042_free_irqs();
-	i8042_controller_reset();
+	i8042_controller_reset(false);
 	i8042_platform_device = NULL;
 
 	return error;
 }
 
-static int __devexit i8042_remove(struct platform_device *dev)
+static int i8042_remove(struct platform_device *dev)
 {
 	i8042_unregister_ports();
 	i8042_free_irqs();
-	i8042_controller_reset();
+	i8042_controller_reset(false);
 	i8042_platform_device = NULL;
 
 	return 0;
@@ -1448,7 +1460,7 @@ static struct platform_driver i8042_driver = {
 		.pm	= &i8042_pm_ops,
 #endif
 	},
-	.remove		= __devexit_p(i8042_remove),
+	.remove		= i8042_remove,
 	.shutdown	= i8042_shutdown,
 };
 

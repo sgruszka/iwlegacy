@@ -1,7 +1,7 @@
 /*
  * bnx2i_iscsi.c: Broadcom NetXtreme II iSCSI driver.
  *
- * Copyright (c) 2006 - 2011 Broadcom Corporation
+ * Copyright (c) 2006 - 2013 Broadcom Corporation
  * Copyright (c) 2007, 2008 Red Hat, Inc.  All rights reserved.
  * Copyright (c) 2007, 2008 Mike Christie
  *
@@ -596,7 +596,7 @@ void bnx2i_drop_session(struct iscsi_cls_session *cls_session)
 /**
  * bnx2i_ep_destroy_list_add - add an entry to EP destroy list
  * @hba:	pointer to adapter instance
- * @ep:		pointer to endpoint (transport indentifier) structure
+ * @ep:		pointer to endpoint (transport identifier) structure
  *
  * EP destroy queue manager
  */
@@ -613,7 +613,7 @@ static int bnx2i_ep_destroy_list_add(struct bnx2i_hba *hba,
  * bnx2i_ep_destroy_list_del - add an entry to EP destroy list
  *
  * @hba: 		pointer to adapter instance
- * @ep: 		pointer to endpoint (transport indentifier) structure
+ * @ep: 		pointer to endpoint (transport identifier) structure
  *
  * EP destroy queue manager
  */
@@ -630,7 +630,7 @@ static int bnx2i_ep_destroy_list_del(struct bnx2i_hba *hba,
 /**
  * bnx2i_ep_ofld_list_add - add an entry to ep offload pending list
  * @hba:	pointer to adapter instance
- * @ep:		pointer to endpoint (transport indentifier) structure
+ * @ep:		pointer to endpoint (transport identifier) structure
  *
  * pending conn offload completion queue manager
  */
@@ -646,7 +646,7 @@ static int bnx2i_ep_ofld_list_add(struct bnx2i_hba *hba,
 /**
  * bnx2i_ep_ofld_list_del - add an entry to ep offload pending list
  * @hba: 		pointer to adapter instance
- * @ep: 		pointer to endpoint (transport indentifier) structure
+ * @ep: 		pointer to endpoint (transport identifier) structure
  *
  * pending conn offload completion queue manager
  */
@@ -721,7 +721,7 @@ bnx2i_find_ep_in_destroy_list(struct bnx2i_hba *hba, u32 iscsi_cid)
 /**
  * bnx2i_ep_active_list_add - add an entry to ep active list
  * @hba:	pointer to adapter instance
- * @ep:		pointer to endpoint (transport indentifier) structure
+ * @ep:		pointer to endpoint (transport identifier) structure
  *
  * current active conn queue manager
  */
@@ -737,7 +737,7 @@ static void bnx2i_ep_active_list_add(struct bnx2i_hba *hba,
 /**
  * bnx2i_ep_active_list_del - deletes an entry to ep active list
  * @hba:	pointer to adapter instance
- * @ep:		pointer to endpoint (transport indentifier) structure
+ * @ep:		pointer to endpoint (transport identifier) structure
  *
  * current active conn queue manager
  */
@@ -808,16 +808,16 @@ struct bnx2i_hba *bnx2i_alloc_hba(struct cnic_dev *cnic)
 	hba->pci_func = PCI_FUNC(hba->pcidev->devfn);
 	hba->pci_devno = PCI_SLOT(hba->pcidev->devfn);
 
-	bnx2i_identify_device(hba);
+	bnx2i_identify_device(hba, cnic);
 	bnx2i_setup_host_queue_size(hba, shost);
 
+	hba->reg_base = pci_resource_start(hba->pcidev, 0);
 	if (test_bit(BNX2I_NX2_DEV_5709, &hba->cnic_dev_type)) {
-		hba->regview = ioremap_nocache(hba->netdev->base_addr,
-					       BNX2_MQ_CONFIG2);
+		hba->regview = pci_iomap(hba->pcidev, 0, BNX2_MQ_CONFIG2);
 		if (!hba->regview)
 			goto ioreg_map_err;
 	} else if (test_bit(BNX2I_NX2_DEV_57710, &hba->cnic_dev_type)) {
-		hba->regview = ioremap_nocache(hba->netdev->base_addr, 4096);
+		hba->regview = pci_iomap(hba->pcidev, 0, 4096);
 		if (!hba->regview)
 			goto ioreg_map_err;
 	}
@@ -874,6 +874,11 @@ struct bnx2i_hba *bnx2i_alloc_hba(struct cnic_dev *cnic)
 		hba->conn_ctx_destroy_tmo = 2 * HZ;
 	}
 
+#ifdef CONFIG_32BIT
+	spin_lock_init(&hba->stat_lock);
+#endif
+	memset(&hba->stats, 0, sizeof(struct iscsi_stats_info));
+
 	if (iscsi_host_add(shost, &hba->pcidev->dev))
 		goto free_dump_mem;
 	return hba;
@@ -884,7 +889,7 @@ cid_que_err:
 	bnx2i_free_mp_bdt(hba);
 mp_bdt_mem_err:
 	if (hba->regview) {
-		iounmap(hba->regview);
+		pci_iounmap(hba->pcidev, hba->regview);
 		hba->regview = NULL;
 	}
 ioreg_map_err:
@@ -910,7 +915,7 @@ void bnx2i_free_hba(struct bnx2i_hba *hba)
 	pci_dev_put(hba->pcidev);
 
 	if (hba->regview) {
-		iounmap(hba->regview);
+		pci_iounmap(hba->pcidev, hba->regview);
 		hba->regview = NULL;
 	}
 	bnx2i_free_mp_bdt(hba);
@@ -1181,12 +1186,18 @@ static int
 bnx2i_mtask_xmit(struct iscsi_conn *conn, struct iscsi_task *task)
 {
 	struct bnx2i_conn *bnx2i_conn = conn->dd_data;
+	struct bnx2i_hba *hba = bnx2i_conn->hba;
 	struct bnx2i_cmd *cmd = task->dd_data;
 
 	memset(bnx2i_conn->gen_pdu.req_buf, 0, ISCSI_DEF_MAX_RECV_SEG_LEN);
 
 	bnx2i_setup_cmd_wqe_template(cmd);
 	bnx2i_conn->gen_pdu.req_buf_size = task->data_count;
+
+	/* Tx PDU/data length count */
+	ADD_STATS_64(hba, tx_pdus, 1);
+	ADD_STATS_64(hba, tx_bytes, task->data_count);
+
 	if (task->data_count) {
 		memcpy(bnx2i_conn->gen_pdu.req_buf, task->data,
 		       task->data_count);
@@ -1684,7 +1695,7 @@ no_nx2_route:
 /**
  * bnx2i_tear_down_conn - tear down iscsi/tcp connection and free resources
  * @hba:	pointer to adapter instance
- * @ep:		endpoint (transport indentifier) structure
+ * @ep:		endpoint (transport identifier) structure
  *
  * destroys cm_sock structure and on chip iscsi context
  */
@@ -2177,6 +2188,59 @@ static int bnx2i_nl_set_path(struct Scsi_Host *shost, struct iscsi_path *params)
 	return 0;
 }
 
+static umode_t bnx2i_attr_is_visible(int param_type, int param)
+{
+	switch (param_type) {
+	case ISCSI_HOST_PARAM:
+		switch (param) {
+		case ISCSI_HOST_PARAM_NETDEV_NAME:
+		case ISCSI_HOST_PARAM_HWADDRESS:
+		case ISCSI_HOST_PARAM_IPADDRESS:
+			return S_IRUGO;
+		default:
+			return 0;
+		}
+	case ISCSI_PARAM:
+		switch (param) {
+		case ISCSI_PARAM_MAX_RECV_DLENGTH:
+		case ISCSI_PARAM_MAX_XMIT_DLENGTH:
+		case ISCSI_PARAM_HDRDGST_EN:
+		case ISCSI_PARAM_DATADGST_EN:
+		case ISCSI_PARAM_CONN_ADDRESS:
+		case ISCSI_PARAM_CONN_PORT:
+		case ISCSI_PARAM_EXP_STATSN:
+		case ISCSI_PARAM_PERSISTENT_ADDRESS:
+		case ISCSI_PARAM_PERSISTENT_PORT:
+		case ISCSI_PARAM_PING_TMO:
+		case ISCSI_PARAM_RECV_TMO:
+		case ISCSI_PARAM_INITIAL_R2T_EN:
+		case ISCSI_PARAM_MAX_R2T:
+		case ISCSI_PARAM_IMM_DATA_EN:
+		case ISCSI_PARAM_FIRST_BURST:
+		case ISCSI_PARAM_MAX_BURST:
+		case ISCSI_PARAM_PDU_INORDER_EN:
+		case ISCSI_PARAM_DATASEQ_INORDER_EN:
+		case ISCSI_PARAM_ERL:
+		case ISCSI_PARAM_TARGET_NAME:
+		case ISCSI_PARAM_TPGT:
+		case ISCSI_PARAM_USERNAME:
+		case ISCSI_PARAM_PASSWORD:
+		case ISCSI_PARAM_USERNAME_IN:
+		case ISCSI_PARAM_PASSWORD_IN:
+		case ISCSI_PARAM_FAST_ABORT:
+		case ISCSI_PARAM_ABORT_TMO:
+		case ISCSI_PARAM_LU_RESET_TMO:
+		case ISCSI_PARAM_TGT_RESET_TMO:
+		case ISCSI_PARAM_IFACE_NAME:
+		case ISCSI_PARAM_INITIATOR_NAME:
+			return S_IRUGO;
+		default:
+			return 0;
+		}
+	}
+
+	return 0;
+}
 
 /*
  * 'Scsi_Host_Template' structure and 'iscsi_tranport' structure template
@@ -2191,6 +2255,7 @@ static struct scsi_host_template bnx2i_host_template = {
 	.eh_device_reset_handler = iscsi_eh_device_reset,
 	.eh_target_reset_handler = iscsi_eh_recover_target,
 	.change_queue_depth	= iscsi_change_queue_depth,
+	.target_alloc		= iscsi_target_alloc,
 	.can_queue		= 2048,
 	.max_sectors		= 127,
 	.cmd_per_lun		= 128,
@@ -2207,37 +2272,12 @@ struct iscsi_transport bnx2i_iscsi_transport = {
 				  CAP_MULTI_R2T | CAP_DATADGST |
 				  CAP_DATA_PATH_OFFLOAD |
 				  CAP_TEXT_NEGO,
-	.param_mask		= ISCSI_MAX_RECV_DLENGTH |
-				  ISCSI_MAX_XMIT_DLENGTH |
-				  ISCSI_HDRDGST_EN |
-				  ISCSI_DATADGST_EN |
-				  ISCSI_INITIAL_R2T_EN |
-				  ISCSI_MAX_R2T |
-				  ISCSI_IMM_DATA_EN |
-				  ISCSI_FIRST_BURST |
-				  ISCSI_MAX_BURST |
-				  ISCSI_PDU_INORDER_EN |
-				  ISCSI_DATASEQ_INORDER_EN |
-				  ISCSI_ERL |
-				  ISCSI_CONN_PORT |
-				  ISCSI_CONN_ADDRESS |
-				  ISCSI_EXP_STATSN |
-				  ISCSI_PERSISTENT_PORT |
-				  ISCSI_PERSISTENT_ADDRESS |
-				  ISCSI_TARGET_NAME | ISCSI_TPGT |
-				  ISCSI_USERNAME | ISCSI_PASSWORD |
-				  ISCSI_USERNAME_IN | ISCSI_PASSWORD_IN |
-				  ISCSI_FAST_ABORT | ISCSI_ABORT_TMO |
-				  ISCSI_LU_RESET_TMO | ISCSI_TGT_RESET_TMO |
-				  ISCSI_PING_TMO | ISCSI_RECV_TMO |
-				  ISCSI_IFACE_NAME | ISCSI_INITIATOR_NAME,
-	.host_param_mask	= ISCSI_HOST_HWADDRESS | ISCSI_HOST_IPADDRESS |
-				  ISCSI_HOST_NETDEV_NAME,
 	.create_session		= bnx2i_session_create,
 	.destroy_session	= bnx2i_session_destroy,
 	.create_conn		= bnx2i_conn_create,
 	.bind_conn		= bnx2i_conn_bind,
 	.destroy_conn		= bnx2i_conn_destroy,
+	.attr_is_visible	= bnx2i_attr_is_visible,
 	.set_param		= iscsi_set_param,
 	.get_conn_param		= iscsi_conn_get_param,
 	.get_session_param	= iscsi_session_get_param,

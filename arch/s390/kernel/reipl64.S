@@ -1,11 +1,12 @@
 /*
- *    Copyright IBM Corp 2000,2011
+ *    Copyright IBM Corp 2000, 2011
  *    Author(s): Holger Smolinski <Holger.Smolinski@de.ibm.com>,
  *		 Denis Joseph Barrow,
  */
 
 #include <linux/linkage.h>
 #include <asm/asm-offsets.h>
+#include <asm/sigp.h>
 
 #
 # store_status
@@ -17,11 +18,11 @@
 #
 ENTRY(store_status)
 	/* Save register one and load save area base */
-	stg	%r1,__LC_SAVE_AREA_64(%r0)
+	stg	%r1,__LC_SAVE_AREA_RESTART
 	lghi	%r1,SAVE_AREA_BASE
 	/* General purpose registers */
 	stmg	%r0,%r15,__LC_GPREGS_SAVE_AREA-SAVE_AREA_BASE(%r1)
-	lg	%r2,__LC_SAVE_AREA_64(%r0)
+	lg	%r2,__LC_SAVE_AREA_RESTART
 	stg	%r2,__LC_GPREGS_SAVE_AREA-SAVE_AREA_BASE+8(%r1)
 	/* Control registers */
 	stctg	%c0,%c15,__LC_CREGS_SAVE_AREA-SAVE_AREA_BASE(%r1)
@@ -62,8 +63,11 @@ ENTRY(store_status)
 	larl	%r2,store_status
 	stg	%r2,__LC_PSW_SAVE_AREA-SAVE_AREA_BASE + 8(%r1)
 	br	%r14
-.align	8
+
+	.section .bss
+	.align	8
 .Lclkcmp:	.quad	0x0000000000000000
+	.previous
 
 #
 # do_reipl_asm
@@ -103,7 +107,7 @@ ENTRY(do_reipl_asm)
 .L003:		st	%r1,__LC_SUBCHANNEL_ID
 		lhi	%r1,0		 # mode 0 = esa
 		slr	%r0,%r0 	 # set cpuid to zero
-		sigp	%r1,%r0,0x12	 # switch to esa mode
+		sigp	%r1,%r0,SIGP_SET_ARCHITECTURE # switch to esa mode
 		lpsw	0
 .Ldisab:	sll	%r14,1
 		srl	%r14,1		 # need to kill hi bit to avoid specification exceptions.

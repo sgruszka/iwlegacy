@@ -25,7 +25,6 @@
  *****************************************************************************/
 
 #include <linux/kernel.h>
-#include <linux/init.h>
 #include <linux/skbuff.h>
 #include <linux/slab.h>
 #include <net/mac80211.h>
@@ -86,16 +85,16 @@ static struct il3945_tpt_entry il3945_tpt_table_g[] = {
 	{-92, RATE_1M_IDX}
 };
 
-#define RATE_MAX_WINDOW          62
+#define RATE_MAX_WINDOW		62
 #define RATE_FLUSH		(3*HZ)
-#define RATE_WIN_FLUSH       (HZ/2)
-#define IL39_RATE_HIGH_TH          11520
-#define IL_SUCCESS_UP_TH	   8960
-#define IL_SUCCESS_DOWN_TH	  10880
-#define RATE_MIN_FAILURE_TH       6
-#define RATE_MIN_SUCCESS_TH       8
-#define RATE_DECREASE_TH       1920
-#define RATE_RETRY_TH	     15
+#define RATE_WIN_FLUSH		(HZ/2)
+#define IL39_RATE_HIGH_TH	11520
+#define IL_SUCCESS_UP_TH	8960
+#define IL_SUCCESS_DOWN_TH	10880
+#define RATE_MIN_FAILURE_TH	6
+#define RATE_MIN_SUCCESS_TH	8
+#define RATE_DECREASE_TH	1920
+#define RATE_RETRY_TH		15
 
 static u8
 il3945_get_rate_idx_by_rssi(s32 rssi, enum ieee80211_band band)
@@ -112,12 +111,10 @@ il3945_get_rate_idx_by_rssi(s32 rssi, enum ieee80211_band band)
 		tpt_table = il3945_tpt_table_g;
 		table_size = ARRAY_SIZE(il3945_tpt_table_g);
 		break;
-
 	case IEEE80211_BAND_5GHZ:
 		tpt_table = il3945_tpt_table_a;
 		table_size = ARRAY_SIZE(il3945_tpt_table_a);
 		break;
-
 	default:
 		BUG();
 		break;
@@ -126,7 +123,7 @@ il3945_get_rate_idx_by_rssi(s32 rssi, enum ieee80211_band band)
 	while (idx < table_size && rssi < tpt_table[idx].min_rssi)
 		idx++;
 
-	idx = min(idx, (table_size - 1));
+	idx = min(idx, table_size - 1);
 
 	return tpt_table[idx].idx;
 }
@@ -328,7 +325,6 @@ il3945_collect_tx_data(struct il3945_rs_sta *rs_sta,
 	win->stamp = jiffies;
 
 	spin_unlock_irqrestore(&rs_sta->lock, flags);
-
 }
 
 /*
@@ -345,12 +341,12 @@ il3945_rs_rate_init(struct il_priv *il, struct ieee80211_sta *sta, u8 sta_id)
 	int i;
 
 	D_INFO("enter\n");
-	if (sta_id == il->ctx.bcast_sta_id)
+	if (sta_id == il->hw_params.bcast_id)
 		goto out;
 
 	psta = (struct il3945_sta_priv *)sta->drv_priv;
 	rs_sta = &psta->rs_sta;
-	sband = hw->wiphy->bands[conf->channel->band];
+	sband = hw->wiphy->bands[conf->chandef.chan->band];
 
 	rs_sta->il = il;
 
@@ -386,8 +382,7 @@ il3945_rs_rate_init(struct il_priv *il, struct ieee80211_sta *sta, u8 sta_id)
 	/* For 5 GHz band it start at IL_FIRST_OFDM_RATE */
 	if (sband->band == IEEE80211_BAND_5GHZ) {
 		rs_sta->last_txrate_idx += IL_FIRST_OFDM_RATE;
-		il->_3945.sta_supp_rates =
-		    il->_3945.sta_supp_rates << IL_FIRST_OFDM_RATE;
+		il->_3945.sta_supp_rates <<= IL_FIRST_OFDM_RATE;
 	}
 
 out:
@@ -406,7 +401,6 @@ il3945_rs_alloc(struct ieee80211_hw *hw, struct dentry *debugfsdir)
 static void
 il3945_rs_free(void *il)
 {
-	return;
 }
 
 static void *
@@ -791,19 +785,16 @@ il3945_rs_get_rate(void *il_r, struct ieee80211_sta *sta, void *il_sta,
 
 	switch (scale_action) {
 	case -1:
-
 		/* Decrese rate */
 		if (low != RATE_INVALID)
 			idx = low;
 		break;
-
 	case 1:
 		/* Increase rate */
 		if (high != RATE_INVALID)
 			idx = high;
 
 		break;
-
 	case 0:
 	default:
 		/* No change */
@@ -824,17 +815,12 @@ out:
 		rs_sta->last_txrate_idx = idx;
 		info->control.rates[0].idx = rs_sta->last_txrate_idx;
 	}
+	info->control.rates[0].count = 1;
 
 	D_RATE("leave: %d\n", idx);
 }
 
 #ifdef CONFIG_MAC80211_DEBUGFS
-static int
-il3945_open_file_generic(struct inode *inode, struct file *file)
-{
-	file->private_data = inode->i_private;
-	return 0;
-}
 
 static ssize_t
 il3945_sta_dbgfs_stats_table_read(struct file *file, char __user *user_buf,
@@ -870,7 +856,7 @@ il3945_sta_dbgfs_stats_table_read(struct file *file, char __user *user_buf,
 
 static const struct file_operations rs_sta_dbgfs_stats_table_ops = {
 	.read = il3945_sta_dbgfs_stats_table_read,
-	.open = il3945_open_file_generic,
+	.open = simple_open,
 	.llseek = default_llseek,
 };
 
@@ -900,12 +886,12 @@ il3945_remove_debugfs(void *il, void *il_sta)
  */
 static void
 il3945_rs_rate_init_stub(void *il_r, struct ieee80211_supported_band *sband,
+			 struct cfg80211_chan_def *chandef,
 			 struct ieee80211_sta *sta, void *il_sta)
 {
 }
 
-static struct rate_control_ops rs_ops = {
-	.module = NULL,
+static const struct rate_control_ops rs_ops = {
 	.name = RS_NAME,
 	.tx_status = il3945_rs_tx_status,
 	.get_rate = il3945_rs_get_rate,
@@ -935,8 +921,7 @@ il3945_rate_scale_init(struct ieee80211_hw *hw, s32 sta_id)
 
 	rcu_read_lock();
 
-	sta =
-	    ieee80211_find_sta(il->ctx.vif, il->stations[sta_id].sta.sta.addr);
+	sta = ieee80211_find_sta(il->vif, il->stations[sta_id].sta.sta.addr);
 	if (!sta) {
 		D_RATE("Unable to find station to initialize rate scaling.\n");
 		rcu_read_unlock();
@@ -952,17 +937,16 @@ il3945_rate_scale_init(struct ieee80211_hw *hw, s32 sta_id)
 	switch (il->band) {
 	case IEEE80211_BAND_2GHZ:
 		/* TODO: this always does G, not a regression */
-		if (il->ctx.active.flags & RXON_FLG_TGG_PROTECT_MSK) {
+		if (il->active.flags & RXON_FLG_TGG_PROTECT_MSK) {
 			rs_sta->tgg = 1;
 			rs_sta->expected_tpt = il3945_expected_tpt_g_prot;
 		} else
 			rs_sta->expected_tpt = il3945_expected_tpt_g;
 		break;
-
 	case IEEE80211_BAND_5GHZ:
 		rs_sta->expected_tpt = il3945_expected_tpt_a;
 		break;
-	case IEEE80211_NUM_BANDS:
+	default:
 		BUG();
 		break;
 	}

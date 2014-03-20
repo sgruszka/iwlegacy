@@ -1,7 +1,5 @@
 /*
- * linux/drivers/s390/cio/qdio.h
- *
- * Copyright 2000,2009 IBM Corp.
+ * Copyright IBM Corp. 2000, 2009
  * Author(s): Utz Bacher <utz.bacher@de.ibm.com>
  *	      Jan Glauber <jang@linux.vnet.ibm.com>
  */
@@ -17,14 +15,6 @@
 #define QDIO_BUSY_BIT_RETRY_DELAY	10		/* 10 milliseconds */
 #define QDIO_BUSY_BIT_RETRIES		1000		/* = 10s retry time */
 #define QDIO_INPUT_THRESHOLD		(500 << 12)	/* 500 microseconds */
-
-/*
- * if an asynchronous HiperSockets queue runs full, the 10 seconds timer wait
- * till next initiative to give transmitted skbs back to the stack is too long.
- * Therefore polling is started in case of multicast queue is filled more
- * than 50 percent.
- */
-#define QDIO_IQDIO_POLL_LVL		65	/* HS multicast queue */
 
 enum qdio_irq_states {
 	QDIO_IRQ_STATE_INACTIVE,
@@ -150,40 +140,6 @@ struct siga_flag {
 	u8:3;
 } __attribute__ ((packed));
 
-struct chsc_ssqd_area {
-	struct chsc_header request;
-	u16:10;
-	u8 ssid:2;
-	u8 fmt:4;
-	u16 first_sch;
-	u16:16;
-	u16 last_sch;
-	u32:32;
-	struct chsc_header response;
-	u32:32;
-	struct qdio_ssqd_desc qdio_ssqd;
-} __attribute__ ((packed));
-
-struct scssc_area {
-	struct chsc_header request;
-	u16 operation_code;
-	u16:16;
-	u32:32;
-	u32:32;
-	u64 summary_indicator_addr;
-	u64 subchannel_indicator_addr;
-	u32 ks:4;
-	u32 kc:4;
-	u32:21;
-	u32 isc:3;
-	u32 word_with_d_bit;
-	u32:32;
-	struct subchannel_id schid;
-	u32 reserved[1004];
-	struct chsc_header response;
-	u32:32;
-} __attribute__ ((packed));
-
 struct qdio_dev_perf_stat {
 	unsigned int adapter_int;
 	unsigned int qdio_int;
@@ -289,6 +245,9 @@ struct qdio_q {
 
 	/* error condition during a data transfer */
 	unsigned int qdio_error;
+
+	/* last scan of the queue */
+	u64 timestamp;
 
 	struct tasklet_struct tasklet;
 	struct qdio_queue_perf_stat q_stats;
@@ -423,31 +382,7 @@ static inline int multicast_outbound(struct qdio_q *q)
 #define queue_irqs_disabled(q)			\
 	(test_bit(QDIO_QUEUE_IRQS_DISABLED, &q->u.in.queue_irq_state) != 0)
 
-#define TIQDIO_SHARED_IND		63
-
-/* device state change indicators */
-struct indicator_t {
-	u32 ind;	/* u32 because of compare-and-swap performance */
-	atomic_t count; /* use count, 0 or 1 for non-shared indicators */
-};
-
-extern struct indicator_t *q_indicators;
-
-static inline int has_multiple_inq_on_dsci(struct qdio_irq *irq)
-{
-	return irq->nr_input_qs > 1;
-}
-
-static inline int references_shared_dsci(struct qdio_irq *irq)
-{
-	return irq->dsci == &q_indicators[TIQDIO_SHARED_IND].ind;
-}
-
-static inline int shared_ind(struct qdio_q *q)
-{
-	struct qdio_irq *i = q->irq_ptr;
-	return references_shared_dsci(i) || has_multiple_inq_on_dsci(i);
-}
+extern u64 last_ai_time;
 
 /* prototypes for thin interrupt */
 void qdio_setup_thinint(struct qdio_irq *irq_ptr);
@@ -460,7 +395,8 @@ int tiqdio_allocate_memory(void);
 void tiqdio_free_memory(void);
 int tiqdio_register_thinints(void);
 void tiqdio_unregister_thinints(void);
-
+void clear_nonshared_ind(struct qdio_irq *);
+int test_nonshared_ind(struct qdio_irq *);
 
 /* prototypes for setup */
 void qdio_inbound_processing(unsigned long data);

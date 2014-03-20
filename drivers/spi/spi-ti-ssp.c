@@ -22,6 +22,7 @@
 #include <linux/err.h>
 #include <linux/completion.h>
 #include <linux/delay.h>
+#include <linux/module.h>
 #include <linux/platform_device.h>
 #include <linux/spi/spi.h>
 #include <linux/mfd/ti_ssp.h>
@@ -236,14 +237,6 @@ static void ti_ssp_spi_work(struct work_struct *work)
 	spin_unlock(&hw->lock);
 }
 
-static int ti_ssp_spi_setup(struct spi_device *spi)
-{
-	if (spi->bits_per_word > 32)
-		return -EINVAL;
-
-	return 0;
-}
-
 static int ti_ssp_spi_transfer(struct spi_device *spi, struct spi_message *m)
 {
 	struct ti_ssp_spi	*hw;
@@ -268,12 +261,6 @@ static int ti_ssp_spi_transfer(struct spi_device *spi, struct spi_message *m)
 			dev_err(&spi->dev, "invalid xfer, full duplex\n");
 			return -EINVAL;
 		}
-
-		if (t->bits_per_word > 32) {
-			dev_err(&spi->dev, "invalid xfer width %d\n",
-				t->bits_per_word);
-			return -EINVAL;
-		}
 	}
 
 	spin_lock(&hw->lock);
@@ -288,7 +275,7 @@ error_unlock:
 	return error;
 }
 
-static int __devinit ti_ssp_spi_probe(struct platform_device *pdev)
+static int ti_ssp_spi_probe(struct platform_device *pdev)
 {
 	const struct ti_ssp_spi_data *pdata;
 	struct ti_ssp_spi *hw;
@@ -296,7 +283,7 @@ static int __devinit ti_ssp_spi_probe(struct platform_device *pdev)
 	struct device *dev = &pdev->dev;
 	int error = 0;
 
-	pdata = dev->platform_data;
+	pdata = dev_get_platdata(dev);
 	if (!pdata) {
 		dev_err(dev, "platform data not found\n");
 		return -EINVAL;
@@ -336,8 +323,8 @@ static int __devinit ti_ssp_spi_probe(struct platform_device *pdev)
 	master->bus_num		= pdev->id;
 	master->num_chipselect	= pdata->num_cs;
 	master->mode_bits	= MODE_BITS;
+	master->bits_per_word_mask = SPI_BPW_RANGE_MASK(1, 32);
 	master->flags		= SPI_MASTER_HALF_DUPLEX;
-	master->setup		= ti_ssp_spi_setup;
 	master->transfer	= ti_ssp_spi_transfer;
 
 	error = spi_register_master(master);
@@ -356,7 +343,7 @@ error_wq:
 	return error;
 }
 
-static int __devexit ti_ssp_spi_remove(struct platform_device *pdev)
+static int ti_ssp_spi_remove(struct platform_device *pdev)
 {
 	struct ti_ssp_spi *hw = platform_get_drvdata(pdev);
 	int error;
@@ -377,24 +364,13 @@ static int __devexit ti_ssp_spi_remove(struct platform_device *pdev)
 
 static struct platform_driver ti_ssp_spi_driver = {
 	.probe		= ti_ssp_spi_probe,
-	.remove		= __devexit_p(ti_ssp_spi_remove),
+	.remove		= ti_ssp_spi_remove,
 	.driver		= {
 		.name	= "ti-ssp-spi",
 		.owner	= THIS_MODULE,
 	},
 };
-
-static int __init ti_ssp_spi_init(void)
-{
-	return platform_driver_register(&ti_ssp_spi_driver);
-}
-module_init(ti_ssp_spi_init);
-
-static void __exit ti_ssp_spi_exit(void)
-{
-	platform_driver_unregister(&ti_ssp_spi_driver);
-}
-module_exit(ti_ssp_spi_exit);
+module_platform_driver(ti_ssp_spi_driver);
 
 MODULE_DESCRIPTION("SSP SPI Master");
 MODULE_AUTHOR("Cyril Chemparathy");
